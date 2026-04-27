@@ -7,19 +7,82 @@ import requests
 from datetime import datetime
 
 # =========================================
-# SETTINGS — Indian Market
+# SETTINGS
 # =========================================
 
-ACCOUNT_SIZE = 500000          # ₹5 Lakhs default — change as needed
-RISK_PER_TRADE = 0.015         # 1.5% risk per trade (slightly aggressive)
-RR_RATIO = 2.5                 # Risk:Reward ratio
-MAX_ATR_STOP_MULTIPLIER = 3.0  # Stop never more than 3x ATR away
-MAX_POSITION_SIZE = 2000       # Max shares per trade
-SCORE_THRESHOLD = 12           # Slightly lower = more picks (aggressive mode)
-TOP_PICKS = 6                  # Top stocks to alert per scan
+ACCOUNT_SIZE    = 500000       # Change to your actual capital
+RISK_PER_TRADE  = 0.015        # 1.5% risk per trade
+RR_RATIO        = 2.5
+MAX_ATR_STOP    = 3.0
+MAX_POSITION    = 2000
+SCORE_THRESHOLD = 16           # Raised from 12 to 16 — stricter = better quality
+TOP_PICKS       = 6
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("CHAT_ID", "")
+TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID         = os.environ.get("CHAT_ID", "")
+
+# =========================================
+# FUNDAMENTAL FILTERS
+# These remove weak companies before
+# technical scanning even begins
+# =========================================
+
+def passes_fundamental_filter(symbol):
+    """
+    Returns True only if the stock passes
+    basic fundamental quality checks.
+    Removes: loss-making, over-leveraged,
+    low-revenue-growth, poor ROE companies.
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        info   = ticker.info
+
+        if not info:
+            return True  # no data = don't block
+
+        # --- 1. Profitability — must not be deeply loss-making ---
+        # Allow slightly loss-making PSUs/growth stocks (EPS > -50)
+        eps = info.get("trailingEps", None)
+        if eps is not None and eps < -50:
+            print(f"    ❌ {symbol}: EPS too negative ({eps:.1f}) — skip")
+            return False
+
+        # --- 2. Debt filter — Debt/Equity must be < 3 ---
+        # Allows capital-intensive infra/banks but blocks junk
+        de_ratio = info.get("debtToEquity", None)
+        if de_ratio is not None and de_ratio > 300:  # yfinance gives % form
+            print(f"    ❌ {symbol}: D/E ratio too high ({de_ratio:.0f}) — skip")
+            return False
+
+        # --- 3. Revenue must be positive ---
+        revenue = info.get("totalRevenue", None)
+        if revenue is not None and revenue <= 0:
+            print(f"    ❌ {symbol}: zero/negative revenue — skip")
+            return False
+
+        # --- 4. Market cap filter — min ₹500 Crore ---
+        # Removes micro-cap operator-driven stocks
+        mktcap = info.get("marketCap", None)
+        if mktcap is not None and mktcap < 5_000_000_000:  # ₹500 Cr
+            print(f"    ❌ {symbol}: market cap too small — skip")
+            return False
+
+        # --- 5. ROE filter — must be > 5% (or no data) ---
+        # Removes capital destroyers
+        roe = info.get("returnOnEquity", None)
+        if roe is not None and roe < 0.05:
+            # Exception: allow defence/infra PSUs with lower ROE
+            sector = info.get("sector", "")
+            if "Industrials" not in sector and "Utilities" not in sector:
+                print(f"    ❌ {symbol}: ROE too low ({roe:.1%}) — skip")
+                return False
+
+        return True
+
+    except Exception as e:
+        print(f"    ⚠️ Fundamental check failed for {symbol}: {e}")
+        return True  # fail open — don't block on API errors
 
 # =========================================
 # TELEGRAM
@@ -27,32 +90,34 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 
 def send_telegram(msg):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        resp = requests.post(url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10)
+        url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        resp = requests.post(
+            url, data={"chat_id": CHAT_ID, "text": msg}, timeout=10
+        )
         if not resp.ok:
-            print(f"⚠️ Telegram error: {resp.status_code} — {resp.text}")
+            print(f"⚠️ Telegram error: {resp.status_code}")
     except Exception as e:
-        print(f"⚠️ Telegram send failed: {e}")
+        print(f"⚠️ Telegram failed: {e}")
 
 # =========================================
-# MARKET TREND FILTER — NIFTY 50
+# MARKET FILTER — NIFTY 50
 # =========================================
 
 def market_is_bullish():
-    # Use NIFTY 50 as market benchmark
     df = yf.download("^NSEI", period="1y", interval="1d", progress=False)
     df = df.dropna()
     df.columns = df.columns.get_level_values(0)
     if df.empty:
         return False
-    df['EMA200'] = ta.trend.ema_indicator(df['Close'], window=200)
     df['EMA50']  = ta.trend.ema_indicator(df['Close'], window=50)
-    latest_close = float(df['Close'].iloc[-1])
-    latest_ema200 = float(df['EMA200'].iloc[-1])
-    latest_ema50  = float(df['EMA50'].iloc[-1])
-    print(f"NIFTY Close: {latest_close:.0f} | EMA50: {latest_ema50:.0f} | EMA200: {latest_ema200:.0f}")
-    # Aggressive: use EMA50 filter instead of EMA200 (catches trends earlier)
-    return latest_close > latest_ema50
+    df['EMA200'] = ta.trend.ema_indicator(df['Close'], window=200)
+    latest       = df.iloc[-1]
+    close        = float(latest['Close'])
+    ema50        = float(latest['EMA50'])
+    ema200       = float(latest['EMA200'])
+    print(f"NIFTY: {close:.0f} | EMA50: {ema50:.0f} | EMA200: {ema200:.0f}")
+    # Bullish only if above BOTH EMAs
+    return close > ema50 and close > ema200
 
 # =========================================
 # SECTOR STRENGTH FILTER
@@ -60,41 +125,41 @@ def market_is_bullish():
 
 def sector_is_strong(etf_symbol):
     try:
-        df = yf.download(etf_symbol, period="1y", interval="1d", progress=False)
+        df = yf.download(etf_symbol, period="6mo", interval="1d", progress=False)
         df = df.dropna()
         df.columns = df.columns.get_level_values(0)
-        if df.empty or len(df) < 50:
-            return True  # if no data, don't block the stock
+        if df.empty or len(df) < 30:
+            return True
         df['EMA50'] = ta.trend.ema_indicator(df['Close'], window=50)
         return float(df['Close'].iloc[-1]) > float(df['EMA50'].iloc[-1])
     except Exception:
-        return True  # fail open
+        return True
 
 # =========================================
-# STOCK SCANNER
+# TECHNICAL SCANNER
 # =========================================
 
 def check_stock(symbol, nifty_df):
     try:
         df = yf.download(symbol, period="2y", interval="1d", progress=False)
-
         if df is None or df.empty or len(df) < 200:
             return None
 
         df = df.dropna()
         df.columns = df.columns.get_level_values(0)
-
         if df.empty or len(df) < 200:
             return None
 
-        # Minimum price filter — skip sub ₹20 stocks
-        latest_close_price = float(df['Close'].iloc[-1])
-        if latest_close_price < 20.0:
+        # Price filter
+        price = float(df['Close'].iloc[-1])
+        if price < 20.0:
             return None
 
-        # Minimum liquidity — ₹1 Cr+ avg daily turnover
-        avg_turnover = float(df['Close'].iloc[-20:].mean() * df['Volume'].iloc[-20:].mean())
-        if avg_turnover < 10_000_000:  # ₹1 Crore
+        # Liquidity — ₹2 Crore+ daily turnover (raised from 1 Cr)
+        avg_turnover = float(
+            df['Close'].iloc[-20:].mean() * df['Volume'].iloc[-20:].mean()
+        )
+        if avg_turnover < 20_000_000:
             return None
 
         # Indicators
@@ -106,6 +171,7 @@ def check_stock(symbol, nifty_df):
         df['AvgVol'] = df['Volume'].rolling(20).mean()
         df['HH20']   = df['High'].rolling(20).max()
         df['High52']  = df['High'].rolling(252).max()
+        df['Low52']   = df['Low'].rolling(252).min()
 
         df['TR'] = (
             df['High'] - df['Low']
@@ -114,83 +180,92 @@ def check_stock(symbol, nifty_df):
         df['ATR'] = df['TR'].rolling(14).mean()
 
         # Relative strength vs NIFTY
-        stock_3m  = df['Close'].pct_change(63).iloc[-1]
-        stock_6m  = df['Close'].pct_change(126).iloc[-1]
-        stock_12m = df['Close'].pct_change(252).iloc[-1] if len(df) >= 252 else stock_6m
+        s3  = df['Close'].pct_change(63).iloc[-1]
+        s6  = df['Close'].pct_change(126).iloc[-1]
+        s12 = df['Close'].pct_change(252).iloc[-1] if len(df) >= 252 else s6
+        n3  = nifty_df['Close'].pct_change(63).iloc[-1]
+        n6  = nifty_df['Close'].pct_change(126).iloc[-1]
+        n12 = nifty_df['Close'].pct_change(252).iloc[-1]
 
-        nifty_3m  = nifty_df['Close'].pct_change(63).iloc[-1]
-        nifty_6m  = nifty_df['Close'].pct_change(126).iloc[-1]
-        nifty_12m = nifty_df['Close'].pct_change(252).iloc[-1]
-
-        rs_score = 0
-        if stock_3m  > nifty_3m:  rs_score += 1
-        if stock_6m  > nifty_6m:  rs_score += 1
-        if stock_12m > nifty_12m: rs_score += 1
+        rs = sum([s3 > n3, s6 > n6, s12 > n12])
 
         latest = df.iloc[-1]
         prev   = df.iloc[-2]
 
         score = 0
 
-        # Relative strength vs benchmark
-        if rs_score >= 2:                                        score += 2
-
-        # EMA trend stack
+        # ---- MOMENTUM SIGNALS ----
+        if rs >= 2:                                               score += 2
+        if rs == 3:                                               score += 1  # bonus for all 3
         if latest['EMA10']  > latest['EMA20']:                   score += 2
         if latest['EMA20']  > latest['EMA50']:                   score += 2
         if latest['EMA50']  > latest['EMA200']:                  score += 2
-
-        # Price above key MAs
-        if latest['Close']  > latest['EMA50']:                   score += 2
+        if latest['Close']  > latest['EMA50']:                   score += 1
         if latest['Close']  > latest['EMA200']:                  score += 2
 
-        # RSI momentum cross
-        if prev['RSI'] < 50 and latest['RSI'] > 50:              score += 2
+        # ---- RSI SIGNALS ----
+        rsi = float(latest['RSI'])
+        if prev['RSI'] < 50 and rsi > 50:                        score += 2  # RSI cross
+        if 50 < rsi < 70:                                         score += 1  # healthy momentum zone
+        if rsi > 70:                                              score -= 1  # overbought penalty
 
-        # 20-day high breakout
-        if latest['Close']  > prev['HH20']:                      score += 2
+        # ---- BREAKOUT SIGNALS ----
+        if latest['Close'] > prev['HH20']:                        score += 2  # 20-day breakout
+        ath_dist = latest['Close'] / latest['High52']
+        if ath_dist > 0.90:                                       score += 2  # within 10% of 52W high
+        elif ath_dist > 0.80:                                     score += 1  # within 20%
 
-        # Near 52-week high (within 15%)
-        if latest['Close'] / latest['High52'] > 0.85:            score += 2
-
-        # Volume surge
+        # ---- VOLUME SIGNALS ----
         if latest['AvgVol'] > 0:
-            if latest['Volume'] / latest['AvgVol'] > 1.5:        score += 2
+            rvol = latest['Volume'] / latest['AvgVol']
+            if rvol > 2.0:                                        score += 2  # strong volume surge
+            elif rvol > 1.5:                                      score += 1  # moderate surge
 
-        # ATR expanding (volatility increasing = momentum)
-        if latest['ATR'] > df['ATR'].iloc[-5]:                   score += 2
+        # ---- VOLATILITY / ATR ----
+        if latest['ATR'] > df['ATR'].iloc[-5]:                    score += 1  # expanding ATR
 
-        # Not extended — within 7% of EMA20 (pullback entry)
+        # ---- ENTRY QUALITY ----
         dist_ema20 = (latest['Close'] - latest['EMA20']) / latest['EMA20']
-        if dist_ema20 < 0.07:                                     score += 2
+        if dist_ema20 < 0.05:                                     score += 2  # tight pullback — best entry
+        elif dist_ema20 < 0.08:                                   score += 1  # acceptable pullback
+        elif dist_ema20 > 0.15:                                   score -= 1  # too extended penalty
 
-        # Outperforming NIFTY over 60 days
+        # ---- 60-DAY OUTPERFORMANCE ----
         if len(df) >= 60 and len(nifty_df) >= 60:
             sr = float(df['Close'].squeeze().pct_change(60).iloc[-1])
             nr = float(nifty_df['Close'].squeeze().pct_change(60).iloc[-1])
-            if sr > nr:                                           score += 2
+            if sr > nr * 1.5:                                     score += 2  # significantly outperforming
+            elif sr > nr:                                         score += 1  # outperforming
+
+        # ---- CIRCUIT BREAKER SAFETY ----
+        # Avoid stocks that are near circuit limits
+        # (already down 15%+ from recent high = distribution)
+        recent_high = df['High'].iloc[-10:].max()
+        if latest['Close'] < recent_high * 0.85:
+            score -= 2  # penalise stocks falling hard recently
 
         if score < SCORE_THRESHOLD:
             return None
 
-        entry = float(latest['Close'])
-        atr   = float(latest['ATR'])
-
+        # ---- POSITION SIZING ----
+        entry        = float(latest['Close'])
+        atr          = float(latest['ATR'])
         five_bar_low = float(df['Low'].iloc[-5:].min())
-        atr_stop     = entry - (MAX_ATR_STOP_MULTIPLIER * atr)
+        atr_stop     = entry - (MAX_ATR_STOP * atr)
         stop         = max(five_bar_low, atr_stop)
         risk         = entry - stop
 
-        if risk <= 0 or risk > entry * 0.15:
+        if risk <= 0 or risk > entry * 0.12:   # tightened to 12%
             return None
 
-        risk_amount   = ACCOUNT_SIZE * RISK_PER_TRADE
-        position_size = min(int(risk_amount / risk), MAX_POSITION_SIZE)
+        risk_amt  = ACCOUNT_SIZE * RISK_PER_TRADE
+        qty       = min(int(risk_amt / risk), MAX_POSITION)
 
-        if position_size <= 0:
+        if qty <= 0:
             return None
 
-        target = entry + (risk * RR_RATIO)
+        target   = entry + (risk * RR_RATIO)
+        invested = round(entry * qty, 0)
 
         return {
             "Symbol":   symbol.replace(".NS", ""),
@@ -199,134 +274,208 @@ def check_stock(symbol, nifty_df):
             "Entry":    round(entry, 2),
             "Stop":     round(float(stop), 2),
             "Target":   round(float(target), 2),
-            "Size":     position_size,
-            "Reward":   round(float(target) - entry, 2),
-            "Risk₹":    round(risk * position_size, 0),
-            "Reward₹":  round((float(target) - entry) * position_size, 0),
+            "Qty":      qty,
+            "Invested": invested,
+            "Risk₹":    round(risk * qty, 0),
+            "Reward₹":  round((float(target) - entry) * qty, 0),
         }
 
     except Exception as e:
-        print(f"  ⚠️ Error checking {symbol}: {e}")
+        print(f"  ⚠️ Error — {symbol}: {e}")
         return None
 
 # =========================================
-# STOCK UNIVERSE — 80+ Indian stocks
-# NSE tickers need .NS suffix for yfinance
+# STOCK UNIVERSE — 120 NSE stocks
+# Curated across 15 high-conviction themes
 # =========================================
 
 sector_map = {
-    # Defence PSU
-    "HAL.NS":   "DEFENCE",  "BEL.NS":    "DEFENCE",  "BHEL.NS":  "DEFENCE",
-    "MTAR.NS":  "DEFENCE",  "PARAS.NS":  "DEFENCE",  "GRSE.NS":  "DEFENCE",
-    "COCHINSHIP.NS": "DEFENCE", "MAZDOCK.NS": "DEFENCE",
 
-    # Railways & Infra
-    "IRFC.NS":  "RAILWAYS", "RVNL.NS":   "RAILWAYS", "IRCON.NS": "RAILWAYS",
-    "RAILTEL.NS":"RAILWAYS", "TITAGARH.NS":"RAILWAYS", "TEXRAIL.NS":"RAILWAYS",
-    "LTIM.NS":  "INFRA",    "LT.NS":     "INFRA",    "IRCTC.NS": "RAILWAYS",
+    # ---- DEFENCE PSU (strong govt order visibility) ----
+    "HAL.NS":        "DEFENCE",
+    "BEL.NS":        "DEFENCE",
+    "MTAR.NS":       "DEFENCE",
+    "GRSE.NS":       "DEFENCE",
+    "COCHINSHIP.NS": "DEFENCE",
+    "MAZDOCK.NS":    "DEFENCE",
+    "PARAS.NS":      "DEFENCE",
+    "DATAPATTNS.NS": "DEFENCE",
+    "MIDHANI.NS":    "DEFENCE",
+    "BEML.NS":       "DEFENCE",
 
-    # PSU Banks
-    "SBIN.NS":  "PSU BANK", "PNB.NS":    "PSU BANK", "BANKBARODA.NS":"PSU BANK",
-    "CANBK.NS": "PSU BANK", "UNIONBANK.NS":"PSU BANK",
+    # ---- RAILWAYS & INFRA ----
+    "IRFC.NS":       "RAILWAYS",
+    "RVNL.NS":       "RAILWAYS",
+    "IRCON.NS":      "RAILWAYS",
+    "RAILTEL.NS":    "RAILWAYS",
+    "IRCTC.NS":      "RAILWAYS",
+    "TITAGARH.NS":   "RAILWAYS",
+    "TEXRAIL.NS":    "RAILWAYS",
+    "KNRCON.NS":     "INFRA",
+    "LT.NS":         "INFRA",
+    "LTTS.NS":       "INFRA",
+    "SIEMENS.NS":    "INFRA",
+    "ABB.NS":        "INFRA",
 
-    # Private Banks & Fintech
-    "HDFCBANK.NS":"BANK",   "ICICIBANK.NS":"BANK",   "AXISBANK.NS":"BANK",
-    "KOTAKBANK.NS":"BANK",  "BAJFINANCE.NS":"FINTECH","PAYTM.NS":  "FINTECH",
-    "POLICYBZR.NS":"FINTECH",
+    # ---- PSU BANKS ----
+    "SBIN.NS":       "PSU BANK",
+    "PNB.NS":        "PSU BANK",
+    "BANKBARODA.NS": "PSU BANK",
+    "CANBK.NS":      "PSU BANK",
+    "UNIONBANK.NS":  "PSU BANK",
+    "INDIANB.NS":    "PSU BANK",
 
-    # IT & AI
-    "TCS.NS":   "IT",       "INFY.NS":   "IT",       "WIPRO.NS":  "IT",
-    "HCLTECH.NS":"IT",      "TECHM.NS":  "IT",       "PERSISTENT.NS":"IT",
-    "COFORGE.NS":"IT",      "MPHASIS.NS":"IT",       "LTTS.NS":   "IT",
+    # ---- PRIVATE BANKS & NBFC ----
+    "HDFCBANK.NS":   "BANK",
+    "ICICIBANK.NS":  "BANK",
+    "AXISBANK.NS":   "BANK",
+    "KOTAKBANK.NS":  "BANK",
+    "INDUSINDBK.NS": "BANK",
+    "FEDERALBNK.NS": "BANK",
+    "BAJFINANCE.NS": "FINTECH",
+    "BAJAJFINSV.NS": "FINTECH",
+    "CHOLAFIN.NS":   "FINTECH",
+    "MUTHOOTFIN.NS": "FINTECH",
 
-    # Renewables / Green Energy
-    "ADANIGREEN.NS":"RENEW", "TATAPOWER.NS":"RENEW",  "GREENKO.NS":"RENEW",
-    "NTPC.NS":  "RENEW",    "SJVN.NS":   "RENEW",    "NHPC.NS":   "RENEW",
-    "SUZLON.NS":"RENEW",    "INOXWIND.NS":"RENEW",    "WAAREEENER.NS":"RENEW",
+    # ---- IT & AI ----
+    "TCS.NS":        "IT",
+    "INFY.NS":       "IT",
+    "WIPRO.NS":      "IT",
+    "HCLTECH.NS":    "IT",
+    "TECHM.NS":      "IT",
+    "PERSISTENT.NS": "IT",
+    "COFORGE.NS":    "IT",
+    "MPHASIS.NS":    "IT",
+    "LTIM.NS":       "IT",
+    "KPITTECH.NS":   "IT",
+    "TATAELXSI.NS":  "IT",
 
-    # EV & Auto
-    "TATAMOTORS.NS":"EV",   "M&M.NS":    "EV",       "BAJAJ-AUTO.NS":"AUTO",
-    "HEROMOTOCO.NS":"AUTO",  "EICHERMOT.NS":"AUTO",   "OLECTRA.NS":"EV",
-    "TVSMOTOR.NS":"AUTO",
+    # ---- RENEWABLES / GREEN ENERGY ----
+    "ADANIGREEN.NS": "RENEW",
+    "TATAPOWER.NS":  "RENEW",
+    "NTPC.NS":       "RENEW",
+    "SJVN.NS":       "RENEW",
+    "NHPC.NS":       "RENEW",
+    "SUZLON.NS":     "RENEW",
+    "INOXWIND.NS":   "RENEW",
+    "WAAREEENER.NS": "RENEW",
+    "JSWENERGY.NS":  "RENEW",
+    "TORNTPOWER.NS": "RENEW",
 
-    # Consumption & FMCG
-    "TITAN.NS":  "CONSUMP",  "DMART.NS":  "CONSUMP",  "TRENT.NS":  "CONSUMP",
-    "ABFRL.NS":  "CONSUMP",  "NYKAA.NS":  "CONSUMP",
+    # ---- EV & AUTO ----
+    "TATAMOTORS.NS": "EV",
+    "M&M.NS":        "EV",
+    "OLECTRA.NS":    "EV",
+    "TVSMOTOR.NS":   "AUTO",
+    "BAJAJ-AUTO.NS": "AUTO",
+    "HEROMOTOCO.NS": "AUTO",
+    "EICHERMOT.NS":  "AUTO",
+    "MOTHERSON.NS":  "AUTO",
 
-    # Capital Markets
-    "BSE.NS":    "CAP MKT",  "CDSL.NS":   "CAP MKT",  "ANGELONE.NS":"CAP MKT",
-    "MCX.NS":    "CAP MKT",  "MOFSL.NS":  "CAP MKT",
+    # ---- CAPITAL MARKETS ----
+    "BSE.NS":        "CAP MKT",
+    "CDSL.NS":       "CAP MKT",
+    "ANGELONE.NS":   "CAP MKT",
+    "MCX.NS":        "CAP MKT",
+    "MOFSL.NS":      "CAP MKT",
+    "360ONE.NS":     "CAP MKT",
+    "NUVAMA.NS":     "CAP MKT",
 
-    # Pharma / Healthcare
-    "SUNPHARMA.NS":"PHARMA", "DRREDDY.NS":"PHARMA",   "CIPLA.NS":  "PHARMA",
-    "DIVISLAB.NS":"PHARMA",  "MANKIND.NS":"PHARMA",   "YATHARTH.NS":"PHARMA",
+    # ---- CONSUMPTION & RETAIL ----
+    "TITAN.NS":      "CONSUMP",
+    "DMART.NS":      "CONSUMP",
+    "TRENT.NS":      "CONSUMP",
+    "NYKAA.NS":      "CONSUMP",
+    "VEDL.NS":       "CONSUMP",
+    "ZOMATO.NS":     "CONSUMP",
+    "DEVYANI.NS":    "CONSUMP",
+    "SAPPHIRE.NS":   "CONSUMP",
 
-    # Chemicals & Specialty
-    "PIDILITIND.NS":"CHEM",  "ATUL.NS":   "CHEM",     "CLEAN.NS":  "CHEM",
-    "NAVINFLUOR.NS":"CHEM",
+    # ---- PHARMA & HEALTHCARE ----
+    "SUNPHARMA.NS":  "PHARMA",
+    "DRREDDY.NS":    "PHARMA",
+    "CIPLA.NS":      "PHARMA",
+    "DIVISLAB.NS":   "PHARMA",
+    "MANKIND.NS":    "PHARMA",
+    "APOLLOHOSP.NS": "PHARMA",
+    "FORTIS.NS":     "PHARMA",
+    "MAXHEALTH.NS":  "PHARMA",
 
-    # Metals & Mining
-    "TATASTEEL.NS":"METAL",  "JSWSTEEL.NS":"METAL",   "HINDALCO.NS":"METAL",
-    "COALINDIA.NS":"METAL",  "NMDC.NS":   "METAL",
+    # ---- CHEMICALS & SPECIALTY ----
+    "PIDILITIND.NS": "CHEM",
+    "ATUL.NS":       "CHEM",
+    "NAVINFLUOR.NS": "CHEM",
+    "CLEAN.NS":      "CHEM",
+    "ROSSARI.NS":    "CHEM",
+    "TATACHEM.NS":   "CHEM",
 
-    # Real Estate
-    "DLF.NS":    "REALTY",   "GODREJPROP.NS":"REALTY","OBEROIRLTY.NS":"REALTY",
-    "PRESTIGE.NS":"REALTY",
+    # ---- METALS & MINING ----
+    "TATASTEEL.NS":  "METAL",
+    "JSWSTEEL.NS":   "METAL",
+    "HINDALCO.NS":   "METAL",
+    "COALINDIA.NS":  "METAL",
+    "NMDC.NS":       "METAL",
+    "SAIL.NS":       "METAL",
 
-    # Telecom & Media
-    "BHARTIARTL.NS":"TELECOM","HFCL.NS":  "TELECOM",
+    # ---- ELECTRONICS MFG (PLI theme) ----
+    "DIXON.NS":      "ELECTRONICS",
+    "AMBER.NS":      "ELECTRONICS",
+    "KAYNES.NS":     "ELECTRONICS",
+    "SYRMA.NS":      "ELECTRONICS",
+    "PGEL.NS":       "ELECTRONICS",
+    "AVALON.NS":     "ELECTRONICS",
 
-    # Semiconductors / Electronics
-    "DIXON.NS":  "ELECTRONICS","AMBER.NS": "ELECTRONICS","KAYNES.NS":"ELECTRONICS",
-    "SYRMA.NS":  "ELECTRONICS",
+    # ---- REAL ESTATE ----
+    "DLF.NS":        "REALTY",
+    "GODREJPROP.NS": "REALTY",
+    "OBEROIRLTY.NS": "REALTY",
+    "PRESTIGE.NS":   "REALTY",
+    "BRIGADE.NS":    "REALTY",
+    "PHOENIXLTD.NS": "REALTY",
+
+    # ---- TELECOM & DIGITAL ----
+    "BHARTIARTL.NS": "TELECOM",
+    "HFCL.NS":       "TELECOM",
+    "INDUSTOWER.NS": "TELECOM",
 }
 
 stocks = list(sector_map.keys())
 
-# Sector ETFs for strength filter (NSE ETFs on yfinance)
+# Sector ETFs for strength check
 sector_etf_map = {
-    "DEFENCE":      "^NSEI",       # No dedicated ETF — use NIFTY
-    "RAILWAYS":     "^NSEI",
-    "PSU BANK":     "PSUBNKBEES.NS",
-    "BANK":         "BANKBEES.NS",
-    "IT":           "ITBEES.NS",
-    "RENEW":        "^NSEI",
-    "EV":           "^NSEI",
-    "AUTO":         "^NSEI",
-    "PHARMA":       "PHARMABEES.NS",
-    "METAL":        "^NSEI",
-    "FINTECH":      "^NSEI",
-    "CONSUMP":      "^NSEI",
-    "CAP MKT":      "^NSEI",
-    "CHEM":         "^NSEI",
-    "REALTY":       "^NSEI",
-    "TELECOM":      "^NSEI",
-    "ELECTRONICS":  "^NSEI",
-    "INFRA":        "^NSEI",
-    "OTHER":        "^NSEI",
+    "PSU BANK":    "PSUBNKBEES.NS",
+    "BANK":        "BANKBEES.NS",
+    "IT":          "ITBEES.NS",
+    "PHARMA":      "PHARMABEES.NS",
+}
+
+# Themes that don't need fundamental filter
+# (PSUs have complex accounting — skip)
+SKIP_FUNDAMENTAL = {
+    "PSU BANK", "RAILWAYS", "DEFENCE", "RENEW", "METAL"
 }
 
 # =========================================
-# MAIN — pure scanner
+# MAIN SCANNER
 # =========================================
 
 def run_agent():
 
-    print(f"\n{'='*50}")
-    print(f"🇮🇳 India Scan — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} IST")
-    print(f"{'='*50}")
+    print(f"\n{'='*55}")
+    print(f"🇮🇳 India Scan — {datetime.now().strftime('%d %b %Y %H:%M:%S')} IST")
+    print(f"{'='*55}")
 
     if not market_is_bullish():
         msg = (
-            f"📉 NIFTY below EMA50 — market weak\n"
-            f"Staying in cash. No trades today.\n"
-            f"Time: {datetime.now().strftime('%d %b %Y %H:%M')} IST"
+            f"📉 NIFTY weak — staying in cash\n"
+            f"Market below EMA50 or EMA200\n"
+            f"{datetime.now().strftime('%d %b %Y %H:%M')} IST"
         )
         print(msg)
         send_telegram(msg)
         return
 
-    # Download NIFTY benchmark
+    # Download NIFTY benchmark once
     nifty_df = yf.download("^NSEI", period="1y", interval="1d", progress=False)
     if nifty_df is None or nifty_df.empty:
         print("⚠️ Failed to download NIFTY data")
@@ -334,62 +483,84 @@ def run_agent():
     nifty_df = nifty_df.dropna()
     nifty_df.columns = nifty_df.columns.get_level_values(0)
 
-    picks = []
+    picks   = []
     checked = 0
+    skipped_fundamental = 0
+    skipped_sector      = 0
 
     for symbol in stocks:
         time.sleep(0.8)
         checked += 1
-
-        # Sector strength check
         theme = sector_map.get(symbol, "OTHER")
-        etf   = sector_etf_map.get(theme, "^NSEI")
-        if etf != "^NSEI":
-            if not sector_is_strong(etf):
-                print(f"  {symbol}: sector weak — skip")
+
+        # Step 1 — Fundamental filter (skip for PSUs)
+        if theme not in SKIP_FUNDAMENTAL:
+            if not passes_fundamental_filter(symbol):
+                skipped_fundamental += 1
                 continue
 
+        # Step 2 — Sector ETF strength filter
+        etf = sector_etf_map.get(theme)
+        if etf:
+            if not sector_is_strong(etf):
+                print(f"  {symbol}: sector ETF weak — skip")
+                skipped_sector += 1
+                continue
+
+        # Step 3 — Technical scan
         result = check_stock(symbol, nifty_df)
         if result:
-            print(f"  ✅ {result['Symbol']} [{result['Theme']}] — score {result['Score']}/28")
+            print(
+                f"  ✅ {result['Symbol']} [{result['Theme']}]"
+                f" score:{result['Score']}  "
+                f"entry:₹{result['Entry']}"
+            )
             picks.append(result)
 
-    print(f"\n📊 Scanned {checked} stocks. {len(picks)} qualify.")
+    print(f"\n{'='*55}")
+    print(f"Scanned : {checked} stocks")
+    print(f"Filtered: {skipped_fundamental} (fundamentals) "
+          f"+ {skipped_sector} (sector)")
+    print(f"Qualify : {len(picks)} stocks")
+    print(f"{'='*55}")
 
     if not picks:
         send_telegram(
             f"🔍 India Scan — {datetime.now().strftime('%d %b %Y %H:%M')} IST\n"
-            f"NIFTY is bullish but no stocks meet all criteria.\n"
-            f"Nothing to act on — wait for next scan."
+            f"✅ NIFTY bullish but no high-quality setups found.\n"
+            f"All signals checked — wait for next scan."
         )
         return
 
-    # Sort by score then reward
+    # Sort: score first, then reward
     picks = sorted(picks, key=lambda x: (x['Score'], x['Reward₹']), reverse=True)
 
-    # Summary header
+    # Summary
     send_telegram(
         f"📊 INDIA SCAN — {datetime.now().strftime('%d %b %Y %H:%M')} IST\n"
-        f"✅ NIFTY bullish (above EMA50)\n"
-        f"🎯 {len(picks)} stock(s) qualify — top {min(TOP_PICKS, len(picks))} below\n"
+        f"✅ NIFTY bullish (above EMA50 + EMA200)\n"
+        f"🔍 Scanned {checked} stocks\n"
+        f"🎯 {len(picks)} high-quality setup(s) found\n"
+        f"Top {min(TOP_PICKS, len(picks))} picks below ↓\n"
         f"Trade what suits you — alerts only."
     )
 
-    # One message per top pick
+    # Individual alerts
     for pick in picks[:TOP_PICKS]:
-        risk_reward = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
+        rr = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
         msg = (
-            f"{'='*30}\n"
+            f"{'='*32}\n"
             f"🚀 {pick['Symbol']}  [{pick['Theme']}]\n"
-            f"Score  : {pick['Score']}/28\n"
-            f"Entry  : ₹{pick['Entry']}\n"
-            f"Stop   : ₹{pick['Stop']}\n"
-            f"Target : ₹{pick['Target']}\n"
-            f"Qty    : {pick['Size']} shares\n"
-            f"Risk   : ₹{int(pick['Risk₹']):,}\n"
-            f"Reward : ₹{int(pick['Reward₹']):,}\n"
-            f"RR     : 1:{risk_reward}\n"
-            f"{'='*30}"
+            f"Score    : {pick['Score']}/32\n"
+            f"Entry    : ₹{pick['Entry']}\n"
+            f"Stop     : ₹{pick['Stop']}\n"
+            f"Target   : ₹{pick['Target']}\n"
+            f"Qty      : {pick['Qty']} shares\n"
+            f"Invested : ₹{int(pick['Invested']):,}\n"
+            f"Risk     : ₹{int(pick['Risk₹']):,}\n"
+            f"Reward   : ₹{int(pick['Reward₹']):,}\n"
+            f"RR Ratio : 1:{rr}\n"
+            f"{'='*32}"
         )
         send_telegram(msg)
         time.sleep(0.5)
@@ -399,6 +570,6 @@ def run_agent():
 # =========================================
 
 if __name__ == "__main__":
-    print("🚀 India Swing Trading Agent Started")
+    print("🚀 India Swing Agent — Enhanced Version")
     run_agent()
     print("✅ Done")
