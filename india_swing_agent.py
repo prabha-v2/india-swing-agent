@@ -569,7 +569,30 @@ def run_agent():
 # RUN
 # =========================================
 
+def is_market_hours():
+    now_utc  = datetime.utcnow()
+    if now_utc.weekday() > 4:
+        return False
+    # NSE: 9:15 AM to 3:30 PM IST = 3:45 to 10:00 UTC
+    # We start 1hr early = 2:45 UTC, end 30min after close = 10:30 UTC
+    time_val = now_utc.hour * 60 + now_utc.minute
+    return (2 * 60 + 45) <= time_val <= (10 * 60 + 30)
+
 if __name__ == "__main__":
-    print("🚀 India Swing Agent — Enhanced Version")
-    run_agent()
-    print("✅ Done")
+    print("🚀 India Professional Swing Trading Agent")
+    print(f"Started at {datetime.utcnow().strftime('%H:%M UTC')}")
+
+    if is_market_hours():
+        run_agent()
+    else:
+        print(f"Outside market hours — waiting...")
+
+    while True:
+        time.sleep(30 * 60)
+        if is_market_hours():
+            run_agent()
+        else:
+            print(f"Market closed — exiting.")
+            break
+
+    print("✅ Done — market closed.")
