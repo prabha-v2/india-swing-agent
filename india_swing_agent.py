@@ -4,7 +4,9 @@ import ta
 import time
 import os
 import requests
-from datetime import datetime
+import json
+from datetime import datetime, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # =========================================
 # SETTINGS
@@ -21,69 +23,65 @@ TOP_PICKS       = 6
 TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID         = os.environ.get("CHAT_ID", "")
 
+CACHE_FILE = "/tmp/india_agent_cache.json"
+
+def load_cache():
+    try:
+        if os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE, "r") as f:
+                cache = json.load(f)
+            if cache.get("date") == str(date.today()):
+                return cache
+    except Exception:
+        pass
+    return {}
+
+def save_cache(data):
+    try:
+        data["date"] = str(date.today())
+        with open(CACHE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
 # =========================================
 # FUNDAMENTAL FILTERS
 # These remove weak companies before
 # technical scanning even begins
 # =========================================
 
-def passes_fundamental_filter(symbol):
-    """
-    Returns True only if the stock passes
-    basic fundamental quality checks.
-    Removes: loss-making, over-leveraged,
-    low-revenue-growth, poor ROE companies.
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-        info   = ticker.info
-
-        if not info:
-            return True  # no data = don't block
-
-        # --- 1. Profitability — must not be deeply loss-making ---
-        # Allow slightly loss-making PSUs/growth stocks (EPS > -50)
-        eps = info.get("trailingEps", None)
-        if eps is not None and eps < -50:
-            print(f"    ❌ {symbol}: EPS too negative ({eps:.1f}) — skip")
-            return False
-
-        # --- 2. Debt filter — Debt/Equity must be < 3 ---
-        # Allows capital-intensive infra/banks but blocks junk
-        de_ratio = info.get("debtToEquity", None)
-        if de_ratio is not None and de_ratio > 300:  # yfinance gives % form
-            print(f"    ❌ {symbol}: D/E ratio too high ({de_ratio:.0f}) — skip")
-            return False
-
-        # --- 3. Revenue must be positive ---
-        revenue = info.get("totalRevenue", None)
-        if revenue is not None and revenue <= 0:
-            print(f"    ❌ {symbol}: zero/negative revenue — skip")
-            return False
-
-        # --- 4. Market cap filter — min ₹500 Crore ---
-        # Removes micro-cap operator-driven stocks
-        mktcap = info.get("marketCap", None)
-        if mktcap is not None and mktcap < 5_000_000_000:  # ₹500 Cr
-            print(f"    ❌ {symbol}: market cap too small — skip")
-            return False
-
-        # --- 5. ROE filter — must be > 5% (or no data) ---
-        # Removes capital destroyers
-        roe = info.get("returnOnEquity", None)
-        if roe is not None and roe < 0.05:
-            # Exception: allow defence/infra PSUs with lower ROE
-            sector = info.get("sector", "")
-            if "Industrials" not in sector and "Utilities" not in sector:
-                print(f"    ❌ {symbol}: ROE too low ({roe:.1%}) — skip")
-                return False
-
+def passes_fundamental_filter(symbol, theme):
+    if theme in SKIP_FUNDAMENTAL:
         return True
-
-    except Exception as e:
-        print(f"    ⚠️ Fundamental check failed for {symbol}: {e}")
-        return True  # fail open — don't block on API errors
-
+    cache      = load_cache()
+    fund_cache = cache.get("fundamentals", {})
+    if symbol in fund_cache:
+        return fund_cache[symbol]
+    result = True
+    try:
+        info = yf.Ticker(symbol).info
+        if info:
+            eps    = info.get("trailingEps", None)
+            de     = info.get("debtToEquity", None)
+            mktcap = info.get("marketCap", None)
+            rev    = info.get("totalRevenue", None)
+            roe    = info.get("returnOnEquity", None)
+            sector = info.get("sector", "")
+            if eps    is not None and eps    < -50:            result = False
+            if de     is not None and de     > 300:            result = False
+            if mktcap is not None and mktcap < 5_000_000_000: result = False
+            if rev    is not None and rev    <= 0:             result = False
+            if roe    is not None and roe    < 0.05:
+                if "Industrials" not in sector and "Utilities" not in sector:
+                    result = False
+    except Exception:
+        result = True
+    cache = load_cache()
+    fund_cache = cache.get("fundamentals", {})
+    fund_cache[symbol] = result
+    cache["fundamentals"] = fund_cache
+    save_cache(cache)
+    return result
 # =========================================
 # TELEGRAM
 # =========================================
@@ -494,8 +492,7 @@ def run_agent():
         theme = sector_map.get(symbol, "OTHER")
 
         # Step 1 — Fundamental filter (skip for PSUs)
-        if theme not in SKIP_FUNDAMENTAL:
-            if not passes_fundamental_filter(symbol):
+        if not passes_fundamental_filter(symbol, theme):
                 skipped_fundamental += 1
                 continue
 
