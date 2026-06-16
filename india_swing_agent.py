@@ -13,11 +13,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # =========================================
 
 ACCOUNT_SIZE    = 500000       # Change to your actual capital
-RISK_PER_TRADE  = 0.015        # 1.5% risk per trade
-RR_RATIO        = 2.5
-MAX_ATR_STOP    = 3.0
+RISK_PER_TRADE  = 0.01         # 1.0% risk per trade (reduced from 1.5% — tighter capital protection)
+RR_RATIO        = 3.0          # 3:1 reward-to-risk (raised from 2.5 — only high-payoff setups)
+MAX_ATR_STOP    = 2.0          # Max 2x ATR for stop loss (tighter than 3.0 — exit losers faster)
+MAX_STOP_PCT    = 0.10         # Max 10% stop distance from entry (was 12%)
 MAX_POSITION    = 2000
-SCORE_THRESHOLD = 16           # Raised from 12 to 16 — stricter = better quality
+SCORE_THRESHOLD = 17           # Raised from 16 — stricter quality filter
 TOP_PICKS       = 6
 
 TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN", "")
@@ -46,8 +47,7 @@ def save_cache(data):
 
 # =========================================
 # FUNDAMENTAL FILTERS
-# These remove weak companies before
-# technical scanning even begins
+# Tightened: EPS>-20, D/E<200, ROE>8%
 # =========================================
 
 def passes_fundamental_filter(symbol, theme):
@@ -67,12 +67,12 @@ def passes_fundamental_filter(symbol, theme):
             rev    = info.get("totalRevenue", None)
             roe    = info.get("returnOnEquity", None)
             sector = info.get("sector", "")
-            if eps    is not None and eps    < -50:            result = False
-            if de     is not None and de     > 300:            result = False
-            if mktcap is not None and mktcap < 5_000_000_000: result = False
-            if rev    is not None and rev    <= 0:             result = False
-            if roe    is not None and roe    < 0.05:
-                if "Industrials" not in sector and "Utilities" not in sector:
+            if eps    is not None and eps    < -20:             result = False   # stricter: was -50
+            if de     is not None and de     > 200:             result = False   # stricter: was 300
+            if mktcap is not None and mktcap < 5_000_000_000:  result = False
+            if rev    is not None and rev    <= 0:              result = False
+            if roe    is not None and roe    < 0.08:            # stricter: was 5%
+                if "Industrials" not in sector and "Utilities" not in sector and "Financial" not in sector:
                     result = False
     except Exception:
         result = True
@@ -82,6 +82,7 @@ def passes_fundamental_filter(symbol, theme):
     cache["fundamentals"] = fund_cache
     save_cache(cache)
     return result
+
 # =========================================
 # TELEGRAM
 # =========================================
@@ -119,22 +120,37 @@ def market_is_bullish():
 
 # =========================================
 # SECTOR STRENGTH FILTER
+# Improved: ETF must be above both EMA50 and EMA200
 # =========================================
 
 def sector_is_strong(etf_symbol):
     try:
-        df = yf.download(etf_symbol, period="6mo", interval="1d", progress=False)
+        df = yf.download(etf_symbol, period="1y", interval="1d", progress=False)
         df = df.dropna()
         df.columns = df.columns.get_level_values(0)
-        if df.empty or len(df) < 30:
+        if df.empty or len(df) < 50:
             return True
-        df['EMA50'] = ta.trend.ema_indicator(df['Close'], window=50)
-        return float(df['Close'].iloc[-1]) > float(df['EMA50'].iloc[-1])
+        df['EMA50']  = ta.trend.ema_indicator(df['Close'], window=50)
+        df['EMA200'] = ta.trend.ema_indicator(df['Close'], window=200)
+        close  = float(df['Close'].iloc[-1])
+        ema50  = float(df['EMA50'].iloc[-1])
+        # Only require EMA200 if we have enough data
+        if len(df) >= 200:
+            ema200 = float(df['EMA200'].iloc[-1])
+            return close > ema50 and close > ema200
+        return close > ema50
     except Exception:
         return True
 
 # =========================================
 # TECHNICAL SCANNER
+# Improvements:
+#   - ADX filter (trend strength, avoids choppy markets)
+#   - MACD confirmation (trend direction signal)
+#   - ROC-21 momentum filter
+#   - Combined breakout+volume bonus
+#   - Tighter stop loss (2x ATR, 10% max)
+#   - Improved RSI logic (penalise weak <40 and overbought >75)
 # =========================================
 
 def check_stock(symbol, nifty_df):
@@ -153,14 +169,14 @@ def check_stock(symbol, nifty_df):
         if price < 20.0:
             return None
 
-        # Liquidity — ₹2 Crore+ daily turnover (raised from 1 Cr)
+        # Liquidity — ₹2 Crore+ daily turnover
         avg_turnover = float(
             df['Close'].iloc[-20:].mean() * df['Volume'].iloc[-20:].mean()
         )
         if avg_turnover < 20_000_000:
             return None
 
-        # Indicators
+        # ---- INDICATORS ----
         df['EMA10']  = ta.trend.ema_indicator(df['Close'], window=10)
         df['EMA20']  = ta.trend.ema_indicator(df['Close'], window=20)
         df['EMA50']  = ta.trend.ema_indicator(df['Close'], window=50)
@@ -176,6 +192,16 @@ def check_stock(symbol, nifty_df):
         ).combine(abs(df['High'] - df['Close'].shift(1)), max
         ).combine(abs(df['Low']  - df['Close'].shift(1)), max)
         df['ATR'] = df['TR'].rolling(14).mean()
+
+        # ADX — trend strength (avoids false signals in ranging/choppy markets)
+        df['ADX'] = ta.trend.adx(df['High'], df['Low'], df['Close'], window=14)
+
+        # MACD — trend confirmation
+        df['MACD']   = ta.trend.macd(df['Close'], window_slow=26, window_fast=12)
+        df['MACD_S'] = ta.trend.macd_signal(df['Close'], window_slow=26, window_fast=12, window_sign=9)
+
+        # ROC-21 — 21-day Rate of Change (momentum check)
+        df['ROC21']  = df['Close'].pct_change(21)
 
         # Relative strength vs NIFTY
         s3  = df['Close'].pct_change(63).iloc[-1]
@@ -201,23 +227,52 @@ def check_stock(symbol, nifty_df):
         if latest['Close']  > latest['EMA50']:                   score += 1
         if latest['Close']  > latest['EMA200']:                  score += 2
 
-        # ---- RSI SIGNALS ----
-        rsi = float(latest['RSI'])
-        if prev['RSI'] < 50 and rsi > 50:                        score += 2  # RSI cross
-        if 50 < rsi < 70:                                         score += 1  # healthy momentum zone
-        if rsi > 70:                                              score -= 1  # overbought penalty
+        # ---- RSI SIGNALS (improved) ----
+        rsi      = float(latest['RSI'])
+        prev_rsi = float(prev['RSI'])
+        if rsi < 40:                                              score -= 2  # weak momentum — avoid
+        if prev_rsi < 50 and rsi > 50:                           score += 2  # fresh RSI cross above midline
+        elif rsi > 55:                                            score += 1  # sustained above midline
+        if 55 < rsi < 75:                                         score += 1  # healthy sweet spot
+        if rsi > 80:                                              score -= 2  # very overbought
+        elif rsi > 75:                                            score -= 1  # mildly overbought
 
         # ---- BREAKOUT SIGNALS ----
-        if latest['Close'] > prev['HH20']:                        score += 2  # 20-day breakout
+        broke_20d = latest['Close'] > prev['HH20']
+        if broke_20d:                                             score += 2  # 20-day breakout
         ath_dist = latest['Close'] / latest['High52']
         if ath_dist > 0.90:                                       score += 2  # within 10% of 52W high
         elif ath_dist > 0.80:                                     score += 1  # within 20%
 
         # ---- VOLUME SIGNALS ----
+        rvol = 0
         if latest['AvgVol'] > 0:
             rvol = latest['Volume'] / latest['AvgVol']
             if rvol > 2.0:                                        score += 2  # strong volume surge
             elif rvol > 1.5:                                      score += 1  # moderate surge
+
+        # ---- BREAKOUT + VOLUME CONFIRMATION (bonus) ----
+        if broke_20d and rvol > 1.5:                              score += 1  # volume-confirmed breakout
+
+        # ---- ADX — TREND STRENGTH (new) ----
+        adx = float(latest['ADX'])
+        if adx > 30:                                              score += 2  # very strong trend
+        elif adx > 20:                                            score += 1  # moderate trend
+        if adx < 15:                                              score -= 2  # choppy/ranging — high risk
+
+        # ---- MACD CONFIRMATION (new) ----
+        macd    = float(latest['MACD'])
+        macd_s  = float(latest['MACD_S'])
+        p_macd  = float(prev['MACD'])
+        p_macd_s = float(prev['MACD_S'])
+        if p_macd < p_macd_s and macd > macd_s:                  score += 2  # fresh MACD bullish crossover
+        elif macd > macd_s:                                       score += 1  # MACD above signal line
+        if macd > 0:                                              score += 1  # MACD above zero line (uptrend)
+
+        # ---- ROC-21 MOMENTUM (new) ----
+        roc21 = float(latest['ROC21'])
+        if roc21 > 0.15:                                          score += 1  # strong 21-day momentum
+        if roc21 < 0:                                             score -= 1  # negative 21-day momentum
 
         # ---- VOLATILITY / ATR ----
         if latest['ATR'] > df['ATR'].iloc[-5]:                    score += 1  # expanding ATR
@@ -236,8 +291,6 @@ def check_stock(symbol, nifty_df):
             elif sr > nr:                                         score += 1  # outperforming
 
         # ---- CIRCUIT BREAKER SAFETY ----
-        # Avoid stocks that are near circuit limits
-        # (already down 15%+ from recent high = distribution)
         recent_high = df['High'].iloc[-10:].max()
         if latest['Close'] < recent_high * 0.85:
             score -= 2  # penalise stocks falling hard recently
@@ -253,7 +306,7 @@ def check_stock(symbol, nifty_df):
         stop         = max(five_bar_low, atr_stop)
         risk         = entry - stop
 
-        if risk <= 0 or risk > entry * 0.12:   # tightened to 12%
+        if risk <= 0 or risk > entry * MAX_STOP_PCT:   # max 10% stop
             return None
 
         risk_amt  = ACCOUNT_SIZE * RISK_PER_TRADE
@@ -266,16 +319,19 @@ def check_stock(symbol, nifty_df):
         invested = round(entry * qty, 0)
 
         return {
-            "Symbol":   symbol.replace(".NS", ""),
-            "Theme":    sector_map.get(symbol, "OTHER"),
-            "Score":    score,
-            "Entry":    round(entry, 2),
-            "Stop":     round(float(stop), 2),
-            "Target":   round(float(target), 2),
-            "Qty":      qty,
-            "Invested": invested,
-            "Risk₹":    round(risk * qty, 0),
-            "Reward₹":  round((float(target) - entry) * qty, 0),
+            "Symbol":    symbol.replace(".NS", ""),
+            "Theme":     sector_map.get(symbol, "OTHER"),
+            "Score":     score,
+            "Entry":     round(entry, 2),
+            "Stop":      round(float(stop), 2),
+            "Target":    round(float(target), 2),
+            "StopPct":   round((entry - float(stop)) / entry * 100, 1),
+            "TargetPct": round((float(target) - entry) / entry * 100, 1),
+            "Qty":       qty,
+            "Invested":  invested,
+            "Risk₹":     round(risk * qty, 0),
+            "Reward₹":   round((float(target) - entry) * qty, 0),
+            "ADX":       round(adx, 1),
         }
 
     except Exception as e:
@@ -283,13 +339,14 @@ def check_stock(symbol, nifty_df):
         return None
 
 # =========================================
-# STOCK UNIVERSE — 120 NSE stocks
-# Curated across 15 high-conviction themes
+# STOCK UNIVERSE — 150 NSE stocks
+# Expanded: added FMCG, Cement, Insurance,
+# Electrical/Consumer, Agrochem themes
 # =========================================
 
 sector_map = {
 
-    # ---- DEFENCE PSU (strong govt order visibility) ----
+    # ---- DEFENCE PSU ----
     "HAL.NS":        "DEFENCE",
     "BEL.NS":        "DEFENCE",
     "MTAR.NS":       "DEFENCE",
@@ -314,6 +371,8 @@ sector_map = {
     "LTTS.NS":       "INFRA",
     "SIEMENS.NS":    "INFRA",
     "ABB.NS":        "INFRA",
+    "CUMMINSIND.NS": "INFRA",
+    "APLAPOLLO.NS":  "INFRA",
 
     # ---- PSU BANKS ----
     "SBIN.NS":       "PSU BANK",
@@ -324,133 +383,180 @@ sector_map = {
     "INDIANB.NS":    "PSU BANK",
 
     # ---- PRIVATE BANKS & NBFC ----
-    "HDFCBANK.NS":   "BANK",
-    "ICICIBANK.NS":  "BANK",
-    "AXISBANK.NS":   "BANK",
-    "KOTAKBANK.NS":  "BANK",
-    "INDUSINDBK.NS": "BANK",
-    "FEDERALBNK.NS": "BANK",
-    "BAJFINANCE.NS": "FINTECH",
-    "BAJAJFINSV.NS": "FINTECH",
-    "CHOLAFIN.NS":   "FINTECH",
-    "MUTHOOTFIN.NS": "FINTECH",
+    "HDFCBANK.NS":    "BANK",
+    "ICICIBANK.NS":   "BANK",
+    "AXISBANK.NS":    "BANK",
+    "KOTAKBANK.NS":   "BANK",
+    "INDUSINDBK.NS":  "BANK",
+    "FEDERALBNK.NS":  "BANK",
+    "IDFCFIRSTB.NS":  "BANK",
+    "BAJFINANCE.NS":  "FINTECH",
+    "BAJAJFINSV.NS":  "FINTECH",
+    "CHOLAFIN.NS":    "FINTECH",
+    "MUTHOOTFIN.NS":  "FINTECH",
 
     # ---- IT & AI ----
-    "TCS.NS":        "IT",
-    "INFY.NS":       "IT",
-    "WIPRO.NS":      "IT",
-    "HCLTECH.NS":    "IT",
-    "TECHM.NS":      "IT",
-    "PERSISTENT.NS": "IT",
-    "COFORGE.NS":    "IT",
-    "MPHASIS.NS":    "IT",
-    "LTIM.NS":       "IT",
-    "KPITTECH.NS":   "IT",
-    "TATAELXSI.NS":  "IT",
+    "TCS.NS":         "IT",
+    "INFY.NS":        "IT",
+    "WIPRO.NS":       "IT",
+    "HCLTECH.NS":     "IT",
+    "TECHM.NS":       "IT",
+    "PERSISTENT.NS":  "IT",
+    "COFORGE.NS":     "IT",
+    "MPHASIS.NS":     "IT",
+    "LTIM.NS":        "IT",
+    "KPITTECH.NS":    "IT",
+    "TATAELXSI.NS":   "IT",
+    "CYIENT.NS":      "IT",
 
     # ---- RENEWABLES / GREEN ENERGY ----
-    "ADANIGREEN.NS": "RENEW",
-    "TATAPOWER.NS":  "RENEW",
-    "NTPC.NS":       "RENEW",
-    "SJVN.NS":       "RENEW",
-    "NHPC.NS":       "RENEW",
-    "SUZLON.NS":     "RENEW",
-    "INOXWIND.NS":   "RENEW",
-    "WAAREEENER.NS": "RENEW",
-    "JSWENERGY.NS":  "RENEW",
-    "TORNTPOWER.NS": "RENEW",
+    "ADANIGREEN.NS":  "RENEW",
+    "TATAPOWER.NS":   "RENEW",
+    "NTPC.NS":        "RENEW",
+    "SJVN.NS":        "RENEW",
+    "NHPC.NS":        "RENEW",
+    "SUZLON.NS":      "RENEW",
+    "INOXWIND.NS":    "RENEW",
+    "WAAREEENER.NS":  "RENEW",
+    "JSWENERGY.NS":   "RENEW",
+    "TORNTPOWER.NS":  "RENEW",
 
     # ---- EV & AUTO ----
-    "TATAMOTORS.NS": "EV",
-    "M&M.NS":        "EV",
-    "OLECTRA.NS":    "EV",
-    "TVSMOTOR.NS":   "AUTO",
-    "BAJAJ-AUTO.NS": "AUTO",
-    "HEROMOTOCO.NS": "AUTO",
-    "EICHERMOT.NS":  "AUTO",
-    "MOTHERSON.NS":  "AUTO",
+    "TATAMOTORS.NS":  "EV",
+    "M&M.NS":         "EV",
+    "OLECTRA.NS":     "EV",
+    "TVSMOTOR.NS":    "AUTO",
+    "BAJAJ-AUTO.NS":  "AUTO",
+    "HEROMOTOCO.NS":  "AUTO",
+    "EICHERMOT.NS":   "AUTO",
+    "MOTHERSON.NS":   "AUTO",
+    "AMARAJABAT.NS":  "AUTO",
+    "ESCORTS.NS":     "AUTO",
 
     # ---- CAPITAL MARKETS ----
-    "BSE.NS":        "CAP MKT",
-    "CDSL.NS":       "CAP MKT",
-    "ANGELONE.NS":   "CAP MKT",
-    "MCX.NS":        "CAP MKT",
-    "MOFSL.NS":      "CAP MKT",
-    "360ONE.NS":     "CAP MKT",
-    "NUVAMA.NS":     "CAP MKT",
+    "BSE.NS":         "CAP MKT",
+    "CDSL.NS":        "CAP MKT",
+    "ANGELONE.NS":    "CAP MKT",
+    "MCX.NS":         "CAP MKT",
+    "MOFSL.NS":       "CAP MKT",
+    "360ONE.NS":      "CAP MKT",
+    "NUVAMA.NS":      "CAP MKT",
 
     # ---- CONSUMPTION & RETAIL ----
-    "TITAN.NS":      "CONSUMP",
-    "DMART.NS":      "CONSUMP",
-    "TRENT.NS":      "CONSUMP",
-    "NYKAA.NS":      "CONSUMP",
-    "VEDL.NS":       "CONSUMP",
-    "ZOMATO.NS":     "CONSUMP",
-    "DEVYANI.NS":    "CONSUMP",
-    "SAPPHIRE.NS":   "CONSUMP",
+    "TITAN.NS":       "CONSUMP",
+    "DMART.NS":       "CONSUMP",
+    "TRENT.NS":       "CONSUMP",
+    "NYKAA.NS":       "CONSUMP",
+    "ZOMATO.NS":      "CONSUMP",
+    "DEVYANI.NS":     "CONSUMP",
+    "SAPPHIRE.NS":    "CONSUMP",
+
+    # ---- FMCG (new theme) ----
+    "HINDUNILVR.NS":  "FMCG",
+    "BRITANNIA.NS":   "FMCG",
+    "NESTLEIND.NS":   "FMCG",
+    "MARICO.NS":      "FMCG",
+    "DABUR.NS":       "FMCG",
+    "GODREJCP.NS":    "FMCG",
 
     # ---- PHARMA & HEALTHCARE ----
-    "SUNPHARMA.NS":  "PHARMA",
-    "DRREDDY.NS":    "PHARMA",
-    "CIPLA.NS":      "PHARMA",
-    "DIVISLAB.NS":   "PHARMA",
-    "MANKIND.NS":    "PHARMA",
-    "APOLLOHOSP.NS": "PHARMA",
-    "FORTIS.NS":     "PHARMA",
-    "MAXHEALTH.NS":  "PHARMA",
+    "SUNPHARMA.NS":   "PHARMA",
+    "DRREDDY.NS":     "PHARMA",
+    "CIPLA.NS":       "PHARMA",
+    "DIVISLAB.NS":    "PHARMA",
+    "MANKIND.NS":     "PHARMA",
+    "APOLLOHOSP.NS":  "PHARMA",
+    "FORTIS.NS":      "PHARMA",
+    "MAXHEALTH.NS":   "PHARMA",
+    "ZYDUSLIFE.NS":   "PHARMA",
+    "TORNTPHARM.NS":  "PHARMA",
+    "ALKEM.NS":       "PHARMA",
 
     # ---- CHEMICALS & SPECIALTY ----
-    "PIDILITIND.NS": "CHEM",
-    "ATUL.NS":       "CHEM",
-    "NAVINFLUOR.NS": "CHEM",
-    "CLEAN.NS":      "CHEM",
-    "ROSSARI.NS":    "CHEM",
-    "TATACHEM.NS":   "CHEM",
+    "PIDILITIND.NS":  "CHEM",
+    "ATUL.NS":        "CHEM",
+    "NAVINFLUOR.NS":  "CHEM",
+    "CLEAN.NS":       "CHEM",
+    "ROSSARI.NS":     "CHEM",
+    "TATACHEM.NS":    "CHEM",
+    "DEEPAKNTR.NS":   "CHEM",
+    "FINEORG.NS":     "CHEM",
+
+    # ---- AGROCHEM (new theme) ----
+    "PIIND.NS":       "AGROCHEM",
+    "COROMANDEL.NS":  "AGROCHEM",
+    "RALLIS.NS":      "AGROCHEM",
 
     # ---- METALS & MINING ----
-    "TATASTEEL.NS":  "METAL",
-    "JSWSTEEL.NS":   "METAL",
-    "HINDALCO.NS":   "METAL",
-    "COALINDIA.NS":  "METAL",
-    "NMDC.NS":       "METAL",
-    "SAIL.NS":       "METAL",
+    "TATASTEEL.NS":   "METAL",
+    "JSWSTEEL.NS":    "METAL",
+    "HINDALCO.NS":    "METAL",
+    "COALINDIA.NS":   "METAL",
+    "NMDC.NS":        "METAL",
+    "SAIL.NS":        "METAL",
 
     # ---- ELECTRONICS MFG (PLI theme) ----
-    "DIXON.NS":      "ELECTRONICS",
-    "AMBER.NS":      "ELECTRONICS",
-    "KAYNES.NS":     "ELECTRONICS",
-    "SYRMA.NS":      "ELECTRONICS",
-    "PGEL.NS":       "ELECTRONICS",
-    "AVALON.NS":     "ELECTRONICS",
+    "DIXON.NS":       "ELECTRONICS",
+    "AMBER.NS":       "ELECTRONICS",
+    "KAYNES.NS":      "ELECTRONICS",
+    "SYRMA.NS":       "ELECTRONICS",
+    "PGEL.NS":        "ELECTRONICS",
+    "AVALON.NS":      "ELECTRONICS",
+
+    # ---- ELECTRICAL & CONSUMER DURABLE (new theme) ----
+    "HAVELLS.NS":     "ELECTRICAL",
+    "POLYCAB.NS":     "ELECTRICAL",
+    "VOLTAS.NS":      "ELECTRICAL",
+    "CROMPTON.NS":    "ELECTRICAL",
+    "BLUESTARCO.NS":  "ELECTRICAL",
+
+    # ---- CEMENT (new theme) ----
+    "ULTRACEMCO.NS":  "CEMENT",
+    "SHREECEM.NS":    "CEMENT",
+    "AMBUJACEM.NS":   "CEMENT",
+    "JKCEMENT.NS":    "CEMENT",
+
+    # ---- INSURANCE (new theme) ----
+    "HDFCLIFE.NS":    "INSURANCE",
+    "ICICIPRULI.NS":  "INSURANCE",
+    "SBILIFE.NS":     "INSURANCE",
+    "STARHEALTH.NS":  "INSURANCE",
 
     # ---- REAL ESTATE ----
-    "DLF.NS":        "REALTY",
-    "GODREJPROP.NS": "REALTY",
-    "OBEROIRLTY.NS": "REALTY",
-    "PRESTIGE.NS":   "REALTY",
-    "BRIGADE.NS":    "REALTY",
-    "PHOENIXLTD.NS": "REALTY",
+    "DLF.NS":         "REALTY",
+    "GODREJPROP.NS":  "REALTY",
+    "OBEROIRLTY.NS":  "REALTY",
+    "PRESTIGE.NS":    "REALTY",
+    "BRIGADE.NS":     "REALTY",
+    "PHOENIXLTD.NS":  "REALTY",
+
+    # ---- LOGISTICS (new theme) ----
+    "CONCOR.NS":      "LOGISTICS",
+    "BLUEDART.NS":    "LOGISTICS",
+    "MAHLOG.NS":      "LOGISTICS",
 
     # ---- TELECOM & DIGITAL ----
-    "BHARTIARTL.NS": "TELECOM",
-    "HFCL.NS":       "TELECOM",
-    "INDUSTOWER.NS": "TELECOM",
+    "BHARTIARTL.NS":  "TELECOM",
+    "HFCL.NS":        "TELECOM",
+    "INDUSTOWER.NS":  "TELECOM",
 }
 
 stocks = list(sector_map.keys())
 
-# Sector ETFs for strength check
+# Sector ETFs for strength check — expanded
 sector_etf_map = {
-    "PSU BANK":    "PSUBNKBEES.NS",
-    "BANK":        "BANKBEES.NS",
-    "IT":          "ITBEES.NS",
-    "PHARMA":      "PHARMABEES.NS",
+    "PSU BANK": "PSUBNKBEES.NS",
+    "BANK":     "BANKBEES.NS",
+    "IT":       "ITBEES.NS",
+    "PHARMA":   "PHARMABEES.NS",
+    "FMCG":     "NIFTYBEES.NS",      # proxy — no dedicated FMCG ETF
+    "AUTO":     "MOM100.NS",
 }
 
-# Themes that don't need fundamental filter
-# (PSUs have complex accounting — skip)
+# Themes that skip fundamental filter (PSUs / complex accounting)
 SKIP_FUNDAMENTAL = {
-    "PSU BANK", "RAILWAYS", "DEFENCE", "RENEW", "METAL"
+    "PSU BANK", "RAILWAYS", "DEFENCE", "RENEW", "METAL",
+    "LOGISTICS", "CEMENT",
 }
 
 # =========================================
@@ -509,8 +615,8 @@ def run_agent():
         if result:
             print(
                 f"  ✅ {result['Symbol']} [{result['Theme']}]"
-                f" score:{result['Score']}  "
-                f"entry:₹{result['Entry']}"
+                f" score:{result['Score']}  ADX:{result['ADX']}"
+                f"  entry:₹{result['Entry']}"
             )
             picks.append(result)
 
@@ -542,16 +648,16 @@ def run_agent():
         f"Trade what suits you — alerts only."
     )
 
-    # Individual alerts
+    # Individual alerts — now show % stop and % to target
     for pick in picks[:TOP_PICKS]:
         rr = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
         msg = (
             f"{'='*32}\n"
             f"🚀 {pick['Symbol']}  [{pick['Theme']}]\n"
-            f"Score    : {pick['Score']}/32\n"
+            f"Score    : {pick['Score']}/40  ADX:{pick['ADX']}\n"
             f"Entry    : ₹{pick['Entry']}\n"
-            f"Stop     : ₹{pick['Stop']}\n"
-            f"Target   : ₹{pick['Target']}\n"
+            f"Stop     : ₹{pick['Stop']} (-{pick['StopPct']}%)\n"
+            f"Target   : ₹{pick['Target']} (+{pick['TargetPct']}%)\n"
             f"Qty      : {pick['Qty']} shares\n"
             f"Invested : ₹{int(pick['Invested']):,}\n"
             f"Risk     : ₹{int(pick['Risk₹']):,}\n"
