@@ -5,7 +5,7 @@ import time
 import os
 import requests
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # =========================================
@@ -566,14 +566,16 @@ SKIP_FUNDAMENTAL = {
 def run_agent():
 
     print(f"\n{'='*55}")
-    print(f"🇮🇳 India Scan — {datetime.now().strftime('%d %b %Y %H:%M:%S')} IST")
+    IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(IST)
+    print(f"🇮🇳 India Scan — {now_ist.strftime('%d %b %Y %H:%M:%S')} IST")
     print(f"{'='*55}")
 
     if not market_is_bullish():
         msg = (
             f"📉 NIFTY weak — staying in cash\n"
             f"Market below EMA50 or EMA200\n"
-            f"{datetime.now().strftime('%d %b %Y %H:%M')} IST"
+            f"{datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%d %b %Y %H:%M')} IST"
         )
         print(msg)
         send_telegram(msg)
@@ -629,7 +631,7 @@ def run_agent():
 
     if not picks:
         send_telegram(
-            f"🔍 India Scan — {datetime.now().strftime('%d %b %Y %H:%M')} IST\n"
+            f"🔍 India Scan — {datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%d %b %Y %H:%M')} IST\n"
             f"✅ NIFTY bullish but no high-quality setups found.\n"
             f"All signals checked — wait for next scan."
         )
@@ -640,7 +642,7 @@ def run_agent():
 
     # Summary
     send_telegram(
-        f"📊 INDIA SCAN — {datetime.now().strftime('%d %b %Y %H:%M')} IST\n"
+        f"📊 INDIA SCAN — {datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime('%d %b %Y %H:%M')} IST\n"
         f"✅ NIFTY bullish (above EMA50 + EMA200)\n"
         f"🔍 Scanned {checked} stocks\n"
         f"🎯 {len(picks)} high-quality setup(s) found\n"
