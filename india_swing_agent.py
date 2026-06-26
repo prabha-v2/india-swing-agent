@@ -307,12 +307,18 @@ def passes_fundamental_filter(symbol, theme):
 # MARKET TREND — NIFTY 50
 # =========================================
 
-def market_is_bullish():
+def get_market_regime():
+    """
+    Returns (regime, label, risk_multiplier):
+      'bull'    — above EMA50 + EMA200 → full size
+      'caution' — above EMA200 only    → half size, raise score threshold
+      'bear'    — below EMA200         → stay in cash
+    """
     df = yf.download("^NSEI", period="1y", interval="1d", progress=False)
     df = df.dropna()
     df.columns = df.columns.get_level_values(0)
     if df.empty:
-        return False
+        return 'bear', 'Data error', 0
     df['EMA50']  = ta.trend.ema_indicator(df['Close'], window=50)
     df['EMA200'] = ta.trend.ema_indicator(df['Close'], window=200)
     latest = df.iloc[-1]
@@ -320,7 +326,12 @@ def market_is_bullish():
     ema50  = float(latest['EMA50'])
     ema200 = float(latest['EMA200'])
     print(f"NIFTY: {close:.0f} | EMA50: {ema50:.0f} | EMA200: {ema200:.0f}")
-    return close > ema50 and close > ema200
+    if close > ema50 and close > ema200:
+        return 'bull',    f"Bullish (above EMA50 + EMA200)", 1.0
+    elif close > ema200:
+        return 'caution', f"Caution (below EMA50, above EMA200) — half size", 0.5
+    else:
+        return 'bear',    f"Bearish (below EMA200) — cash only", 0
 
 # =========================================
 # SECTOR STRENGTH
@@ -707,7 +718,7 @@ def print_trade_stats():
 # MAIN TECHNICAL SCANNER
 # =========================================
 
-def check_stock(symbol, nifty_df, hot_sectors):
+def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
     try:
         df = yf.download(symbol, period="2y", interval="1d", progress=False)
         if df is None or df.empty or len(df) < 200:
@@ -888,7 +899,7 @@ def check_stock(symbol, nifty_df, hot_sectors):
         if theme_etf and theme_etf in hot_sectors:
             score += 2
 
-        if score < SCORE_THRESHOLD:
+        if score < threshold:
             return None
 
         # ---- POSITION SIZING ----
@@ -1184,16 +1195,23 @@ def run_agent():
     update_trade_outcomes()
     print_trade_stats()
 
-    # ---- Step 1: Market regime filters ----
-    if not market_is_bullish():
+    # ---- Step 1: Market regime ----
+    regime, regime_label, regime_multiplier = get_market_regime()
+
+    if regime == 'bear':
         msg = (
-            f"📉 NIFTY weak — staying in cash\n"
-            f"Market below EMA50 or EMA200\n"
+            f"📉 NIFTY below EMA200 — staying in cash\n"
+            f"{regime_label}\n"
             f"{now_ist.strftime('%d %b %Y %H:%M')} IST"
         )
         print(msg)
         send_telegram(msg)
         return
+
+    # Caution mode: raise score threshold so only the strongest setups qualify
+    active_threshold = SCORE_THRESHOLD + (3 if regime == 'caution' else 0)
+    if regime == 'caution':
+        print(f"⚠️ Caution mode — score threshold raised to {active_threshold}, half position size")
 
     vix = get_india_vix()
     if vix > VIX_EXTREME:
@@ -1205,7 +1223,8 @@ def run_agent():
         )
         return
 
-    effective_risk = RISK_PER_TRADE * (0.5 if vix > VIX_ELEVATED else 1.0)
+    # Combine regime + VIX multipliers for final position size
+    effective_risk = RISK_PER_TRADE * regime_multiplier * (0.5 if vix > VIX_ELEVATED else 1.0)
     vix_label      = f"Elevated ({vix:.1f}) — half size" if vix > VIX_ELEVATED else f"Normal ({vix:.1f})"
 
     print("\nChecking market breadth...")
@@ -1272,7 +1291,7 @@ def run_agent():
             skipped_earn += 1
             continue
 
-        result = check_stock(symbol, nifty_df, hot_sectors)
+        result = check_stock(symbol, nifty_df, hot_sectors, threshold=active_threshold)
 
         if result:
             blocked, block_reason = pick_blocked_by_portfolio(result, positions, theme_pct)
@@ -1344,7 +1363,7 @@ def run_agent():
     send_telegram(
         f"📊 INDIA PRO SCAN — {now_ist.strftime('%d %b %Y %H:%M')} IST\n"
         f"{'='*34}\n"
-        f"NIFTY  : Bullish (EMA50 + EMA200)\n"
+        f"NIFTY  : {regime_label}\n"
         f"VIX    : {vix_label}\n"
         f"Breadth: {breadth_label} ({breadth}%)\n"
         f"Hot    : {hot_str}\n"
