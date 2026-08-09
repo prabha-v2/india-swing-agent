@@ -8,6 +8,7 @@ import json
 import csv
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
+from io import StringIO
 
 # =========================================
 # SETTINGS
@@ -24,6 +25,7 @@ TOP_PICKS        = 6
 MAX_PER_SECTOR   = 2             # Max picks per theme
 
 # Feature flags
+EXPAND_UNIVERSE  = True          # Fetch Nifty 500 dynamically (adds ~320 extra stocks)
 NEWS_SENTIMENT   = True
 CHECK_15MIN      = True
 PORTFOLIO_FILE   = "positions.csv"
@@ -1178,6 +1180,126 @@ sector_map = {
     "INDUSTOWER.NS":  "TELECOM",
 }
 
+# =========================================
+# DYNAMIC UNIVERSE
+# =========================================
+
+# NSE "Industry" (from the Nifty 500 constituents CSV) -> our theme labels.
+# Our themes are finer-grained than NSE's industry buckets (e.g. BANK vs
+# PSU BANK vs FINTECH all fall under "Financial Services"), so this is a
+# best-effort mapping; stocks that don't fit an existing theme land in OTHER
+# and simply skip the hot-sector/sector-strength bonuses tied to THEME_TO_ETF.
+NSE_INDUSTRY_TO_THEME = {
+    "Financial Services":              "BANK",
+    "Information Technology":          "IT",
+    "Healthcare":                      "PHARMA",
+    "Fast Moving Consumer Goods":      "FMCG",
+    "Automobile and Auto Components":  "AUTO",
+    "Capital Goods":                   "INFRA",
+    "Power":                           "RENEW",
+    "Metals & Mining":                 "METAL",
+    "Chemicals":                       "CHEM",
+    "Construction Materials":          "CEMENT",
+    "Construction":                    "INFRA",
+    "Realty":                          "REALTY",
+    "Oil Gas & Consumable Fuels":      "OTHER",
+    "Telecommunication":               "TELECOM",
+    "Consumer Durables":               "ELECTRICAL",
+    "Consumer Services":               "CONSUMP",
+    "Services":                        "LOGISTICS",
+    "Textiles":                        "OTHER",
+    "Media Entertainment & Publication": "OTHER",
+    "Diversified":                     "OTHER",
+}
+
+NSE_NIFTY500_URL   = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
+# Broader (unfiltered, all-series) NSE equity list — used as a fallback if the
+# curated Nifty 500 CSV fetch/parse fails. No industry column, so everything
+# added this way lands in theme "OTHER" (still scanned, just no sector bonus).
+NSE_EQUITY_FALLBACK_URL = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
+
+def _nse_get(url):
+    """
+    GET an NSE archives CSV with a real browser User-Agent and a primed
+    session (NSE's WAF frequently 403s bare requests/pandas default UA with
+    no cookies — hitting the homepage first to pick up session cookies is
+    the standard workaround).
+    """
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"),
+        "Accept": "text/csv,application/csv,*/*",
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    session.get("https://www.nseindia.com", timeout=10)  # prime cookies
+    resp = session.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.text
+
+def get_dynamic_universe(base_sector_map):
+    """
+    Fetch the Nifty 500 constituent list from NSE and return an extended
+    sector_map that combines the curated base_sector_map with it.
+
+    Tries the NSE Nifty 500 CSV first (has an Industry column we can map to
+    our themes), then falls back to NSE's full equity list CSV (no sector
+    data — added stocks land in "OTHER") if that fails for any reason. Any
+    failure here should never crash the scan — worst case we fall back to
+    the curated list — but we print loudly so a silent ~180-only universe
+    doesn't go unnoticed.
+    """
+    print("\nFetching Nifty 500 universe...")
+    extended = dict(base_sector_map)   # start with curated list
+    before   = len(extended)
+
+    # ---- Attempt 1: NSE Nifty 500 constituents CSV ----
+    try:
+        text = _nse_get(NSE_NIFTY500_URL)
+        df = pd.read_csv(StringIO(text))
+        df.columns = [c.strip() for c in df.columns]
+        added = 0
+        for _, row in df.iterrows():
+            sym = str(row.get("Symbol", "")).strip()
+            if not sym or sym.lower() == "nan":
+                continue
+            sym_ns = f"{sym}.NS"
+            if sym_ns in extended:
+                continue
+            industry = str(row.get("Industry", "")).strip()
+            theme = NSE_INDUSTRY_TO_THEME.get(industry, "OTHER")
+            extended[sym_ns] = theme
+            added += 1
+        print(f"  NSE Nifty500 OK — Curated: {before} | Added: {added} | Total: {len(extended)}")
+        return extended
+    except Exception as e:
+        print(f"  ⚠️ NSE Nifty500 fetch/parse failed ({type(e).__name__}: {e}) — trying fallback source...")
+
+    # ---- Attempt 2: NSE full equity list CSV (EQ series only, no sector data) ----
+    try:
+        text = _nse_get(NSE_EQUITY_FALLBACK_URL)
+        df = pd.read_csv(StringIO(text))
+        df.columns = [c.strip() for c in df.columns]
+        added = 0
+        for _, row in df.iterrows():
+            sym    = str(row.get("SYMBOL", "")).strip()
+            series = str(row.get(" SERIES", row.get("SERIES", ""))).strip()
+            if not sym or sym.lower() == "nan" or series != "EQ":
+                continue
+            sym_ns = f"{sym}.NS"
+            if sym_ns in extended:
+                continue
+            extended[sym_ns] = "OTHER"
+            added += 1
+        print(f"  NSE full equity list OK — Curated: {before} | Added: {added} | Total: {len(extended)}")
+        return extended
+    except Exception as e:
+        print(f"  ⚠️ NSE fallback list also failed ({type(e).__name__}: {e}) — using curated list only ({before} stocks)")
+
+    return extended
+
+CURATED_SECTOR_MAP = dict(sector_map)   # pristine snapshot — see run_agent()
 stocks = list(sector_map.keys())
 
 # =========================================
@@ -1185,10 +1307,23 @@ stocks = list(sector_map.keys())
 # =========================================
 
 def run_agent():
+    global sector_map, stocks
+
     print(f"\n{'='*55}")
     now_ist = datetime.now(IST)
     print(f"🇮🇳 India Pro Scan — {now_ist.strftime('%d %b %Y %H:%M:%S')} IST")
     print(f"{'='*55}")
+
+    # ---- Step -1: Build universe (curated + optional Nifty 500 expansion) ----
+    # check_stock() and the fundamental/sector filters below read the module-level
+    # sector_map global directly, so we rebuild it here (and `stocks` alongside it)
+    # rather than threading a local dict through every function signature.
+    # Always expand from the pristine CURATED_SECTOR_MAP (not the current
+    # sector_map) since this loops every 30min in one process — expanding
+    # from an already-expanded map would just re-fetch NSE for no new data.
+    if EXPAND_UNIVERSE:
+        sector_map = get_dynamic_universe(CURATED_SECTOR_MAP)
+    stocks = list(sector_map.keys())
 
     # ---- Step 0: Check open trade outcomes ----
     print("\nChecking open trade outcomes...")
