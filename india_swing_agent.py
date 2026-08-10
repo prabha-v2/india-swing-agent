@@ -871,6 +871,29 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
         recent_high = df['High'].iloc[-10:].max()
         if latest['Close'] < recent_high * 0.85: score -= 2
 
+        # ---- OVEREXTENSION / "STRAIGHT UP, NEEDS COOL-OFF" ----
+        # Catches the case a human reviewer flags on sight (e.g. NETWEB 10-Aug-26:
+        # "looks nice but straight up here, would be better with 1-2 days cool off")
+        # but that the rest of the scorer actually rewards — fresh RSI cross,
+        # rising MACD hist, rising OBV, and a volume breakout all fire on exactly
+        # this kind of sharp, un-rested move. This looks at the last 3 sessions
+        # directly instead of relying on those proxies.
+        last3 = df.iloc[-3:]
+        up_days_3 = int((last3['Close'] > last3['Open']).sum())
+        move_3d = float((latest['Close'] - df['Close'].iloc[-4]) / df['Close'].iloc[-4]) if len(df) >= 4 else 0.0
+        no_pullback_1d = float(latest['Close']) > float(prev['Close']) and float(prev['Close']) > float(df['Close'].iloc[-3])
+
+        overextended = False
+        if move_3d > 0.08 and up_days_3 >= 2:
+            overextended = True
+        if up_days_3 == 3 and move_3d > 0.06:
+            overextended = True
+
+        if overextended:
+            score -= 3
+        elif no_pullback_1d and move_3d > 0.05:
+            score -= 1
+
         # ---- OBV ----
         if obv_rising and obv_trend_pos:               score += 2
         elif obv_rising:                                score += 1
@@ -957,6 +980,13 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
 
         adx_label = f"{adx_val:.0f} ({'Strong' if adx_val > 30 else 'Moderate' if adx_val > 20 else 'Weak'})"
 
+        if overextended:
+            extension_label = f"⚠️ Extended ({move_3d:+.1%}/3d, {up_days_3}/3 up) — consider 1-2 day cool-off"
+        elif no_pullback_1d and move_3d > 0.05:
+            extension_label = f"Slightly stretched ({move_3d:+.1%}/3d)"
+        else:
+            extension_label = "OK"
+
         return {
             "Symbol":    symbol.replace(".NS", ""),
             "Theme":     theme,
@@ -967,6 +997,7 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
             "OBV":       obv_label,
             "ADX":       adx_label,
             "Squeeze":   "Yes" if bb_squeeze else "No",
+            "Extension": extension_label,
             "Entry":     round(entry, 2),
             "Stop":      round(float(stop), 2),
             "Target":    round(float(target), 2),
@@ -1526,6 +1557,7 @@ def run_agent():
         conf_block = f"{conf_emoji} 15m    : {reason15}"
 
         news_warn = "\n⚠️ NEGATIVE NEWS — review before entering" if ns <= -2 else ""
+        ext_warn  = f"\n⚠️ {pick['Extension']}" if pick['Extension'].startswith("⚠️") else ""
 
         msg = (
             f"{'='*34}\n"
@@ -1537,6 +1569,7 @@ def run_agent():
             f"OBV     : {pick['OBV']}\n"
             f"ADX     : {pick['ADX']}\n"
             f"Squeeze : {pick['Squeeze']}\n"
+            f"Extension: {pick['Extension']}\n"
             f"{news_block}\n"
             f"{conf_block}\n"
             f"Entry   : ₹{pick['Entry']}\n"
@@ -1547,7 +1580,8 @@ def run_agent():
             f"Risk    : ₹{int(pick['Risk₹']):,}\n"
             f"Reward  : ₹{int(pick['Reward₹']):,}\n"
             f"RR      : 1:{rr}"
-            f"{news_warn}\n"
+            f"{news_warn}"
+            f"{ext_warn}\n"
             f"{'='*34}"
         )
         send_telegram(msg)
