@@ -1580,7 +1580,11 @@ def run_agent():
 
     print("\nChecking market breadth...")
     breadth = get_market_breadth()
-    if breadth < 40:
+    # In bear mode, low breadth is expected — use a much lower bar (15%) so we
+    # still catch sector-specific rallies (pharma, IT, FMCG) even when the broad
+    # market is weak. In bull/caution mode keep the standard 40% bar.
+    breadth_floor = 15 if regime == 'bear' else 40
+    if breadth < breadth_floor:
         send_telegram(
             f"⚠️ Market breadth WEAK ({breadth}%)\n"
             f"Only {breadth}% of Nifty 500 stocks above EMA50.\n"
