@@ -4,3 +4,4 @@ ta
 requests
 lxml
 html5lib
+anthropic>=0.40.0

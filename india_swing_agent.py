@@ -41,8 +41,10 @@ VIX_ELEVATED     = 20.0          # half position size
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID          = os.environ.get("CHAT_ID", "")
+TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "")
+CHAT_ID           = os.environ.get("CHAT_ID", "")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
 
 CACHE_FILE       = "/tmp/india_agent_cache.json"
 
@@ -314,7 +316,11 @@ def get_market_regime():
     Returns (regime, label, risk_multiplier):
       'bull'    — above EMA50 + EMA200 → full size
       'caution' — above EMA200 only    → half size, raise score threshold
-      'bear'    — below EMA200         → stay in cash
+      'bear'    — below EMA200         → tiny size (0.25%), very high threshold,
+                                         only sectors showing own strength scanned.
+                                         Previously this was "cash only / no scans"
+                                         but that caused missing pharma/defensive
+                                         rallies when the broad market was weak.
     """
     df = yf.download("^NSEI", period="1y", interval="1d", progress=False)
     df = df.dropna()
@@ -329,11 +335,11 @@ def get_market_regime():
     ema200 = float(latest['EMA200'])
     print(f"NIFTY: {close:.0f} | EMA50: {ema50:.0f} | EMA200: {ema200:.0f}")
     if close > ema50 and close > ema200:
-        return 'bull',    f"Bullish (above EMA50 + EMA200)", 1.0
+        return 'bull',    "Bullish (above EMA50 + EMA200)", 1.0
     elif close > ema200:
-        return 'caution', f"Caution (below EMA50, above EMA200) — half size", 0.5
+        return 'caution', "Caution (below EMA50, above EMA200) — half size", 0.5
     else:
-        return 'bear',    f"Bearish (below EMA200) — cash only", 0
+        return 'bear',    "Bear market (below EMA200) — sector leaders only, ¼ size", 0.25
 
 # =========================================
 # SECTOR STRENGTH
@@ -889,10 +895,17 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
         if up_days_3 == 3 and move_3d > 0.06:
             overextended = True
 
-        if overextended:
-            score -= 3
-        elif no_pullback_1d and move_3d > 0.05:
-            score -= 1
+        # Institutional breakout exception: skip overextension penalty when
+        # volume is 3x+ normal AND stock is near its 52-week high — that's
+        # real institutional buying, not retail chasing. This is what caused
+        # pharma leaders to be missed on their breakout days.
+        is_institutional_breakout = rvol > 3.0 and ath_dist > 0.92
+
+        if not is_institutional_breakout:
+            if overextended:
+                score -= 3
+            elif no_pullback_1d and move_3d > 0.05:
+                score -= 1
 
         # ---- OBV ----
         if obv_rising and obv_trend_pos:               score += 2
@@ -928,7 +941,36 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
         if theme_etf and theme_etf in hot_sectors:
             score += 2
 
-        if score < threshold:
+        # ---- SETUP TYPE (before threshold so we can adjust it) ----
+        if bb_squeeze and broke_20d:
+            setup = "Squeeze Breakout"
+        elif broke_20d and rvol > 2.0:
+            setup = "Volume Breakout"
+        elif dist_ema20 < 0.05 and rsi > 50:
+            setup = "EMA20 Pullback"
+        elif ath_dist > 0.95:
+            setup = "ATH Breakout"
+        elif bb_squeeze:
+            setup = "Squeeze Setup"
+        else:
+            setup = "Trend Continuation"
+
+        # Breakout setups have hard price+volume proof — lower their bar by 4 pts
+        if setup in ("Volume Breakout", "ATH Breakout", "Squeeze Breakout"):
+            effective_threshold = threshold - 4
+        else:
+            effective_threshold = threshold
+
+        # Momentum alert: strong volume breakout near 52w high, even below threshold
+        is_momentum_alert = (
+            rvol > 2.5 and
+            float(latest['Close']) > float(prev['HH20']) and
+            ath_dist > 0.90 and
+            float(latest['Close']) > float(latest['EMA50']) and
+            score >= 10
+        )
+
+        if score < effective_threshold and not is_momentum_alert:
             return None
 
         # ---- POSITION SIZING ----
@@ -950,20 +992,6 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
         target   = entry + (risk * RR_RATIO)
         invested = round(entry * qty, 0)
         acct_pct = round((invested / ACCOUNT_SIZE) * 100, 1)
-
-        # ---- SETUP TYPE ----
-        if bb_squeeze and broke_20d:
-            setup = "Squeeze Breakout"
-        elif broke_20d and rvol > 2.0:
-            setup = "Volume Breakout"
-        elif dist_ema20 < 0.05 and rsi > 50:
-            setup = "EMA20 Pullback"
-        elif ath_dist > 0.95:
-            setup = "ATH Breakout"
-        elif bb_squeeze:
-            setup = "Squeeze Setup"
-        else:
-            setup = "Trend Continuation"
 
         # ---- LABELS ----
         if candle_score >= 3:    candle_label = "Strong"
@@ -998,6 +1026,10 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
             "ADX":       adx_label,
             "Squeeze":   "Yes" if bb_squeeze else "No",
             "Extension": extension_label,
+            "RVOL":      round(rvol, 1),
+            "RSI":       round(rsi, 1),
+            "Move3d":    f"{move_3d:+.1%}",
+            "MomentumAlert": is_momentum_alert and score < effective_threshold,
             "Entry":     round(entry, 2),
             "Stop":      round(float(stop), 2),
             "Target":    round(float(target), 2),
@@ -1013,6 +1045,152 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
     except Exception as e:
         print(f"  ⚠️ {symbol}: {e}")
         return None
+
+# =========================================
+# SIGNAL PERFORMANCE (reads trade_log.csv)
+# =========================================
+
+def get_recent_performance(n_days: int = 60) -> dict:
+    """Read trade_log.csv and compute signal quality stats for the last n_days."""
+    path = Path(TRADE_LOG_FILE)
+    if not path.exists():
+        return {}
+    try:
+        df = pd.read_csv(path)
+        if df.empty or "outcome" not in df.columns:
+            return {}
+        df["date"]  = pd.to_datetime(df["date"], errors="coerce")
+        cutoff      = datetime.now(IST).replace(tzinfo=None) - timedelta(days=n_days)
+        recent      = df[df["date"] >= cutoff].copy()
+        closed      = recent[recent["outcome"].isin(["TARGET HIT", "STOPPED"])].copy()
+
+        def stats(rows):
+            total = len(rows)
+            wins  = int((rows["outcome"] == "TARGET HIT").sum())
+            return {"trades": total, "wins": wins,
+                    "win_rate": round(wins / total, 2) if total > 0 else None}
+
+        by_setup  = {g: stats(gdf) for g, gdf in closed.groupby("setup")  if len(gdf) >= 2}
+        by_theme  = {g: stats(gdf) for g, gdf in closed.groupby("theme")  if len(gdf) >= 2}
+
+        last5  = closed.sort_values("outcome_date").tail(5)
+        streak = " → ".join(
+            "✅W" if r == "TARGET HIT" else "❌L" for r in last5["outcome"]
+        ) if not last5.empty else "No closed trades yet"
+
+        return {
+            "window_days":   n_days,
+            "total_signals": len(recent),
+            "overall":       stats(closed),
+            "by_setup":      by_setup,
+            "by_theme":      by_theme,
+            "recent_streak": streak,
+        }
+    except Exception as e:
+        print(f"  ⚠️ Performance read failed: {e}")
+        return {}
+
+
+# =========================================
+# CLAUDE REASONING LAYER
+# =========================================
+
+def claude_reason_india(candidates: list, market_ctx: dict, perf: dict) -> dict:
+    """
+    Send India scan candidates + market context + recent performance to Claude.
+    Returns ranked picks with conviction reasoning; empty dict on failure.
+    """
+    if not ANTHROPIC_API_KEY:
+        print("  ⚠️ ANTHROPIC_API_KEY not set — skipping Claude reasoning")
+        return {}
+    try:
+        import anthropic
+    except ImportError:
+        print("  ⚠️ anthropic package not installed — pip install anthropic")
+        return {}
+
+    perf_lines = []
+    if perf:
+        overall = perf.get("overall", {})
+        wr      = overall.get("win_rate")
+        n       = overall.get("trades", 0)
+        perf_lines.append(
+            f"Overall win rate (last {perf.get('window_days',60)}d): "
+            + (f"{int(wr*100)}% across {n} closed signals" if wr is not None else "Not enough data yet")
+        )
+        for grp_name, grp_data in [("setup", perf.get("by_setup", {})),
+                                    ("theme", perf.get("by_theme",  {}))]:
+            if grp_data:
+                perf_lines.append(f"Win rate by {grp_name}:")
+                for s, v in sorted(grp_data.items(), key=lambda x: -(x[1].get("win_rate") or 0)):
+                    perf_lines.append(f"  {s}: {int(v['win_rate']*100)}% ({v['wins']}/{v['trades']})")
+        perf_lines.append(f"Recent streak (last 5 closed): {perf.get('recent_streak','N/A')}")
+
+    cand_lines = []
+    for i, c in enumerate(candidates, 1):
+        cand_lines.append(
+            f"{i}. {c['Symbol']} [{c['Theme']}] | {c['Setup']} | "
+            f"Score:{c['Score']} RVOL:{c['RVOL']}x RSI:{c['RSI']} "
+            f"MACD:{c['MACD']} OBV:{c['OBV']} ADX:{c['ADX']} "
+            f"Entry:₹{c['Entry']} Stop:₹{c['Stop']} Target:₹{c['Target']} "
+            f"Extension:{c['Extension']}"
+        )
+
+    prompt = f"""You are a professional Indian stock market swing trading analyst (NSE/BSE).
+The user reviews these alerts and decides which trades to actually take — NOT every signal.
+Your job: prioritise and explain the WHY using real performance data.
+
+MARKET CONDITIONS:
+- NIFTY: {market_ctx.get('regime', 'N/A')}
+- India VIX: {market_ctx.get('vix_label', 'N/A')}
+- Breadth: {market_ctx.get('breadth_label', 'N/A')} ({market_ctx.get('breadth', 'N/A')}% above EMA50)
+- Hot themes: {market_ctx.get('hot_str', 'None')}
+
+RECENT SIGNAL PERFORMANCE (last 60 days — screener accuracy, not user P&L):
+{chr(10).join(perf_lines) if perf_lines else 'No performance data yet.'}
+
+TODAY'S CANDIDATES ({len(candidates)} stocks):
+{chr(10).join(cand_lines)}
+
+Respond ONLY with a valid JSON object — no markdown fences, no extra text:
+{{
+  "market_read": "<2 sentences: NIFTY/sector tone and what it means for swing trades today>",
+  "picks": [
+    {{"symbol": "TICKER", "conviction": "high|medium|low",
+      "reason": "<1-2 sentences referencing indicators AND recent performance data>"}}
+  ],
+  "skip": [
+    {{"symbol": "TICKER", "reason": "<1 sentence why you'd pass>"}}
+  ],
+  "overall_confidence": "high|medium|low",
+  "confidence_reason": "<one sentence>"
+}}
+
+Rules:
+- picks: top 3-5 by conviction. Downweight setups/themes with poor recent win rate.
+- skip: list candidates to avoid (sector weakness, poor setup history, overextension).
+- Be specific — use actual indicator values and performance stats.
+- India context: prefer stocks with strong sector tailwinds (defence, pharma, IT rotation).
+"""
+    try:
+        client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"  ⚠️ Claude JSON parse error: {e}")
+        return {}
+    except Exception as e:
+        print(f"  ⚠️ Claude API error: {e}")
+        return {}
+
 
 # =========================================
 # STOCK UNIVERSE — NSE stocks
@@ -1368,20 +1546,23 @@ def run_agent():
     # ---- Step 1: Market regime ----
     regime, regime_label, regime_multiplier = get_market_regime()
 
+    # Bear mode: don't exit — scan at very high threshold with tiny position size.
+    # The sector strength check inside the scan loop already ensures only sectors
+    # with their ETF above EMA200 (e.g. PHARMABEES) get through — so this
+    # naturally filters to defensive/outperforming sectors even in a bear market.
     if regime == 'bear':
-        msg = (
-            f"📉 NIFTY below EMA200 — staying in cash\n"
-            f"{regime_label}\n"
+        send_telegram(
+            f"⚠️ NIFTY below EMA200 — bear market scan\n"
+            f"Scanning only sector leaders (ETF above EMA200)\n"
+            f"Position size: ¼ normal | High conviction bar only\n"
             f"{now_ist.strftime('%d %b %Y %H:%M')} IST"
         )
-        print(msg)
-        send_telegram(msg)
-        return
 
-    # Caution mode: raise score threshold so only the strongest setups qualify
-    active_threshold = SCORE_THRESHOLD + (3 if regime == 'caution' else 0)
-    if regime == 'caution':
-        print(f"⚠️ Caution mode — score threshold raised to {active_threshold}, half position size")
+    # Caution mode: +3 threshold. Bear mode: +5 threshold (very high bar).
+    threshold_bump  = 5 if regime == 'bear' else (3 if regime == 'caution' else 0)
+    active_threshold = SCORE_THRESHOLD + threshold_bump
+    if threshold_bump:
+        print(f"⚠️ {regime.capitalize()} mode — threshold raised to {active_threshold}, size ×{regime_multiplier}")
 
     vix = get_india_vix()
     if vix > VIX_EXTREME:
@@ -1498,37 +1679,88 @@ def run_agent():
         )
         return
 
-    picks = sorted(picks, key=lambda x: (x['Score'], x['Reward₹']), reverse=True)
-    top_picks = picks[:TOP_PICKS]
+    # ---- Step 5: Separate quality picks from momentum-only alerts ----
+    regular_picks = sorted(
+        [p for p in picks if not p.get('MomentumAlert')],
+        key=lambda x: (x['Score'], x['Reward₹']), reverse=True
+    )
+    momentum_only = sorted(
+        [p for p in picks if p.get('MomentumAlert')],
+        key=lambda x: x['RVOL'], reverse=True
+    )
+    candidates = regular_picks[:10]
 
-    # ---- Step 5: News + 15-min checks ----
+    hot_str = ", ".join(sorted(hot_sectors)) if hot_sectors else "None"
+    pos_str = f"{len(positions)} open" if positions else "None"
+
+    # ---- Step 5b: Recent signal performance for Claude ----
+    print("\nReading recent signal performance...")
+    perf = get_recent_performance(60)
+    if perf and perf.get("overall", {}).get("trades", 0) > 0:
+        ov = perf["overall"]
+        wr = ov.get("win_rate")
+        print(f"  Last 60d: {int(wr*100) if wr else 0}% win rate over {ov['trades']} closed signals")
+
+    # ---- Step 5c: Claude reasoning ----
+    market_ctx = {
+        "regime":        regime_label,
+        "vix_label":     vix_label,
+        "breadth_label": breadth_label,
+        "breadth":       breadth,
+        "hot_str":       hot_str,
+    }
+    claude_output = {}
+    if candidates:
+        print(f"\nAsking Claude to reason over {len(candidates)} candidates...")
+        claude_output = claude_reason_india(candidates, market_ctx, perf)
+        if claude_output:
+            print(f"  🧠 Market read: {claude_output.get('market_read','')[:80]}...")
+            print(f"  🧠 Picks : {[p['symbol'] for p in claude_output.get('picks',[])]}")
+            print(f"  🧠 Skip  : {[s['symbol'] for s in claude_output.get('skip',[])]}")
+
+    # ---- Step 5d: Re-rank by Claude conviction ----
+    claude_picks_map = {}
+    skip_set         = set()
+    if claude_output and claude_output.get("picks"):
+        claude_order     = [p["symbol"] for p in claude_output["picks"]]
+        claude_picks_map = {p["symbol"]: p for p in claude_output["picks"]}
+        skip_set         = {s["symbol"] for s in claude_output.get("skip", [])}
+        ordered   = [c for sym in claude_order for c in candidates if c['Symbol'] == sym]
+        fallback  = [c for c in candidates if c['Symbol'] not in set(claude_order) | skip_set]
+        top_picks = (ordered + fallback)[:TOP_PICKS]
+    else:
+        top_picks = candidates[:TOP_PICKS]
+
+    # ---- Step 5e: News + 15-min on final picks ----
     sentiment_map = {}
     confirmed_map = {}
-
-    print(f"\nRunning post-scan checks on top {len(top_picks)} picks...")
-    for pick in top_picks:
-        sym = pick['Symbol']
+    all_checked   = top_picks + momentum_only[:3]
+    print(f"\nRunning post-scan checks on {len(all_checked)} picks...")
+    for pick in all_checked:
+        sym    = pick['Symbol']
         sym_ns = f"{sym}.NS"
-
         if NEWS_SENTIMENT:
             ns, nl, nh = get_news_sentiment(sym_ns)
             sentiment_map[sym] = (ns, nl, nh)
             print(f"  📰 {sym} news: {nl} (score {ns:+d})")
             time.sleep(0.3)
-
-        if CHECK_15MIN:
+        if CHECK_15MIN and not pick.get('MomentumAlert'):
             ok, reason = passes_15min_check(sym_ns, pick['Entry'])
             confirmed_map[sym] = (ok, reason)
-            status = "✅" if ok else "❌"
-            print(f"  {status} {sym} 15m: {reason}")
+            print(f"  {'✅' if ok else '❌'} {sym} 15m: {reason}")
             time.sleep(0.5)
 
     # ---- Step 6: Log picks ----
     log_picks(top_picks, confirmed_map, sentiment_map)
 
     # ---- Step 7: Telegram alerts ----
-    hot_str = ", ".join(sorted(hot_sectors)) if hot_sectors else "None"
-    pos_str = f"{len(positions)} open" if positions else "None"
+    market_read = claude_output.get("market_read", "") if claude_output else ""
+    conf_label  = (
+        f"{claude_output.get('overall_confidence','').upper()} — {claude_output.get('confidence_reason','')}"
+        if claude_output else "N/A (Claude disabled)"
+    )
+    bear_warn      = "\n⚠️ BEAR MARKET SCAN — sector leaders only, ¼ size" if regime == 'bear' else ""
+    claude_summary = f"\n🧠 {market_read}\n🎯 Confidence: {conf_label}" if market_read else ""
 
     send_telegram(
         f"📊 INDIA PRO SCAN — {now_ist.strftime('%d %b %Y %H:%M')} IST\n"
@@ -1538,13 +1770,15 @@ def run_agent():
         f"Breadth: {breadth_label} ({breadth}%)\n"
         f"Hot    : {hot_str}\n"
         f"Portfolio: {pos_str} | Heat: {total_heat:.0%}\n"
-        f"Setups : {len(picks)} found\n"
-        f"Top {len(top_picks)} picks below ↓"
+        f"Quality: {len(regular_picks)} setups | Momentum: {len(momentum_only)} alerts"
+        f"{bear_warn}"
+        f"{claude_summary}"
     )
 
+    # --- Quality picks (Claude-ranked) ---
     for pick in top_picks:
-        sym  = pick['Symbol']
-        rr   = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
+        sym = pick['Symbol']
+        rr  = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
 
         ns, nl, headlines = sentiment_map.get(sym, (0, "N/A", []))
         news_emoji = "📰✅" if ns >= 2 else "📰⚠️" if ns <= -2 else "📰"
@@ -1553,9 +1787,16 @@ def run_agent():
             news_block += f"\n  → {headlines[0][:60]}"
 
         ok15, reason15 = confirmed_map.get(sym, (True, "Not checked"))
-        conf_emoji = "✅" if ok15 else "⚠️"
-        conf_block = f"{conf_emoji} 15m    : {reason15}"
+        conf_block = f"{'✅' if ok15 else '⚠️'} 15m    : {reason15}"
 
+        c_pick = claude_picks_map.get(sym, {})
+        if c_pick:
+            icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}.get(c_pick.get("conviction",""), "⚪")
+            claude_block = f"\n🧠 {icon} {c_pick.get('conviction','').upper()}: {c_pick.get('reason','')}"
+        else:
+            claude_block = ""
+
+        bear_size_warn = "\n⚠️ BEAR MARKET — use ¼ normal size" if regime == 'bear' else ""
         news_warn = "\n⚠️ NEGATIVE NEWS — review before entering" if ns <= -2 else ""
         ext_warn  = f"\n⚠️ {pick['Extension']}" if pick['Extension'].startswith("⚠️") else ""
 
@@ -1563,7 +1804,9 @@ def run_agent():
             f"{'='*34}\n"
             f"🚀 {sym}  [{pick['Theme']}]\n"
             f"Setup   : {pick['Setup']}\n"
-            f"Score   : {pick['Score']}\n"
+            f"Score   : {pick['Score']}"
+            f"{claude_block}\n"
+            f"RVOL    : {pick['RVOL']}x | RSI: {pick['RSI']} | Move: {pick['Move3d']}\n"
             f"Candle  : {pick['Candle']}\n"
             f"MACD    : {pick['MACD']}\n"
             f"OBV     : {pick['OBV']}\n"
@@ -1580,8 +1823,49 @@ def run_agent():
             f"Risk    : ₹{int(pick['Risk₹']):,}\n"
             f"Reward  : ₹{int(pick['Reward₹']):,}\n"
             f"RR      : 1:{rr}"
+            f"{bear_size_warn}"
             f"{news_warn}"
             f"{ext_warn}\n"
+            f"{'='*34}"
+        )
+        send_telegram(msg)
+        time.sleep(0.5)
+
+    # --- Claude skip list ---
+    skip_list = claude_output.get("skip", []) if claude_output else []
+    if skip_list:
+        skip_lines = "\n".join(f"  • {s['symbol']}: {s['reason']}" for s in skip_list)
+        send_telegram(f"⚠️ Claude flagged — lower priority:\n{skip_lines}")
+        time.sleep(0.3)
+
+    # --- Momentum-only alerts ---
+    for pick in momentum_only[:3]:
+        sym = pick['Symbol']
+        rr  = round(pick['Reward₹'] / pick['Risk₹'], 1) if pick['Risk₹'] > 0 else 0
+        ns, nl, headlines = sentiment_map.get(sym, (0, "N/A", []))
+        news_emoji = "📰✅" if ns >= 2 else "📰⚠️" if ns <= -2 else "📰"
+        news_block = f"{news_emoji} News: {nl}"
+        if headlines:
+            news_block += f"\n  → {headlines[0][:60]}"
+        news_warn = "\n⚠️ NEGATIVE NEWS — review before entering" if ns <= -2 else ""
+
+        msg = (
+            f"{'='*34}\n"
+            f"⚡ MOMENTUM ALERT — {sym}  [{pick['Theme']}]\n"
+            f"⚠️ Below quality threshold — HIGHER RISK / SMALLER SIZE\n"
+            f"{'='*34}\n"
+            f"Setup    : {pick['Setup']}\n"
+            f"Score    : {pick['Score']} (quality bar: {SCORE_THRESHOLD})\n"
+            f"RVOL     : {pick['RVOL']}x | RSI: {pick['RSI']} | Move: {pick['Move3d']}\n"
+            f"Extension: {pick['Extension']}\n"
+            f"{news_block}\n"
+            f"Entry   : ₹{pick['Entry']}\n"
+            f"Stop    : ₹{pick['Stop']} (-{pick['StopPct']}%)\n"
+            f"Target  : ₹{pick['Target']} (+{pick['TargetPct']}%)\n"
+            f"Qty     : {pick['Qty']} shares (consider ½)\n"
+            f"Risk    : ₹{int(pick['Risk₹']):,}\n"
+            f"RR      : 1:{rr}"
+            f"{news_warn}\n"
             f"{'='*34}"
         )
         send_telegram(msg)
@@ -1607,14 +1891,6 @@ if __name__ == "__main__":
     if is_market_hours():
         run_agent()
     else:
-        print("Outside market hours — waiting...")
+        print("Outside market hours — skipping this run.")
 
-    while True:
-        time.sleep(30 * 60)
-        if is_market_hours():
-            run_agent()
-        else:
-            print("Market closed — exiting.")
-            break
-
-    print("✅ Done — market closed.")
+    print("✅ Done.")
