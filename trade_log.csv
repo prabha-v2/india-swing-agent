@@ -9,3 +9,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-09-24,MANKIND,PHARMA,Trend Continuation,26,2482.2,2373.61,2807.96,11,27304,1194,3583,3.0,Positive,Yes,,,,,
 2026-09-24,BEML,DEFENCE,EMA20 Pullback,25,2078.5,1973.58,2393.26,11,22864,1154,3462,3.0,Neutral,No,,,,,
 2026-09-24,WELSPUNLIV,OTHER,ATH Breakout,23,222.82,211.46,256.9,110,24510,1250,3749,3.0,Positive,No,,,,,
+2026-09-24,ACE,INFRA,ATH Breakout,26,1252.2,1202.0,1402.8,24,30053,1205,3614,3.0,Neutral,Yes,,,,,
+2026-09-24,APLAPOLLO,INFRA,EMA20 Pullback,26,2202.8,2110.0,2481.2,13,28636,1206,3619,3.0,Neutral,Yes,,,,,
