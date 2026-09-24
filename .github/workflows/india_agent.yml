@@ -1,12 +1,10 @@
 name: India Swing Trading Agent
 
 on:
-  schedule:
-    - cron: '45 2 * * 1-5'    # 8:15 AM IST — 1hr before open
-    - cron: '45 4 * * 1-5'    # 10:15 AM IST
-    - cron: '45 6 * * 1-5'    # 12:15 PM IST
-    - cron: '45 8 * * 1-5'    # 2:15 PM IST
-  workflow_dispatch:
+  # Triggered by cron-job.org (POST .../actions/workflows/india_agent.yml/dispatches),
+  # not GitHub's `schedule:`, which started runs 2-5 hours late. Mon-Fri, IST:
+  #   09:30, 11:30, 13:15, 14:45  (the 14:45 run alerts ~15:00, before the 15:30 close)
+  workflow_dispatch:   # also usable manually from the Actions tab
 
 # Allow workflow to commit trade_log.csv back to repo
 permissions:
