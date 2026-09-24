@@ -30,6 +30,8 @@ NEWS_SENTIMENT   = True
 CHECK_15MIN      = True
 PORTFOLIO_FILE   = "positions.csv"
 TRADE_LOG_FILE   = "trade_log.csv"
+MAX_HOLD_DAYS    = 30            # close a signal as EXPIRED if neither stop nor target hit within this many calendar days
+MIN_PERF_SAMPLE  = 8             # min unique closed signals before a setup/theme win rate is shown to Claude
 
 # Portfolio risk limits
 MAX_PORTFOLIO_HEAT = 0.60        # max 60% of capital deployed
@@ -112,8 +114,8 @@ def get_market_breadth():
         "TITAN.NS","SUNPHARMA.NS","ULTRACEMCO.NS","WIPRO.NS","NTPC.NS",
         # Mid caps
         "PERSISTENT.NS","COFORGE.NS","POLYCAB.NS","DIXON.NS","TRENT.NS",
-        "ZOMATO.NS","DMART.NS","ADANIGREEN.NS","HAVELLS.NS","MUTHOOTFIN.NS",
-        "CDSL.NS","BSE.NS","ANGELONE.NS","TATAMOTORS.NS","M&M.NS",
+        "ETERNAL.NS","DMART.NS","ADANIGREEN.NS","HAVELLS.NS","MUTHOOTFIN.NS",
+        "CDSL.NS","BSE.NS","ANGELONE.NS","TMPV.NS","M&M.NS",
         "DRREDDY.NS","CIPLA.NS","DIVISLAB.NS","PIDILITIND.NS","DEEPAKNTR.NS",
         "IRFC.NS","RVNL.NS","HAL.NS","BEL.NS","TATAPOWER.NS",
         "SUZLON.NS","WAAREEENER.NS","CHOLAFIN.NS","IDFCFIRSTB.NS","MANKIND.NS"
@@ -589,25 +591,34 @@ TRADE_LOG_FIELDS = [
 ]
 
 def log_picks(picks, confirmed_map, sentiment_map):
+    """Append picks to trade_log.csv.
+
+    Skips a symbol that already has an open signal (no outcome yet) — re-logging it
+    every run made one stop-out count as many losses in the win-rate stats.
+    """
     log_file    = Path(TRADE_LOG_FILE)
     today_str   = datetime.now(IST).strftime('%Y-%m-%d')
     file_exists = log_file.exists()
     existing    = set()
+    open_syms   = set()
     if file_exists:
         try:
             with open(log_file, newline='') as f:
                 for row in csv.DictReader(f):
                     existing.add((row.get('date',''), row.get('symbol','')))
+                    if not row.get('outcome', '').strip():
+                        open_syms.add(row.get('symbol',''))
         except Exception:
             pass
+    logged = 0
     with open(log_file, 'a', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=TRADE_LOG_FIELDS)
         if not file_exists:
             writer.writeheader()
         for pick in picks:
             sym = pick['Symbol']
-            if (today_str, sym) in existing:
-                continue
+            if (today_str, sym) in existing or sym in open_syms:
+                continue  # already logged today, or an earlier signal is still open
             rr = round(pick['Reward₹'] / pick['Risk₹'], 2) if pick['Risk₹'] > 0 else 0
             writer.writerow({
                 'date':           today_str,
@@ -631,61 +642,86 @@ def log_picks(picks, confirmed_map, sentiment_map):
                 'pnl_inr':        '',
                 'pnl_pct':        '',
             })
-    print(f"📋 Logged {len(picks)} picks to {TRADE_LOG_FILE}")
+            logged += 1
+    print(f"📋 Logged {logged} new picks to {TRADE_LOG_FILE} ({len(picks) - logged} already open/logged)")
 
 def update_trade_outcomes():
+    """
+    For every open trade in trade_log.csv (outcome == ''), walk the daily bars
+    after the signal date and record the first stop or target hit (stop checked
+    first when both fall in one bar; gaps fill at the open). Signals that hit
+    neither within MAX_HOLD_DAYS are closed as EXPIRED at the latest close.
+    """
     log_file = Path(TRADE_LOG_FILE)
     if not log_file.exists():
         return
     rows    = []
     updated = 0
-    today_str = datetime.now(IST).strftime('%Y-%m-%d')
+    today   = datetime.now(IST).replace(tzinfo=None)
     try:
         with open(log_file, newline='') as f:
             rows = list(csv.DictReader(f))
     except Exception as e:
         print(f"⚠️ Could not read trade log: {e}")
         return
-    for row in rows:
-        if row.get('outcome', '').strip():
-            continue
-        sym    = row.get('symbol', '')
-        entry  = float(row.get('entry', 0) or 0)
-        stop   = float(row.get('stop', 0) or 0)
-        target = float(row.get('target', 0) or 0)
-        qty    = int(float(row.get('qty', 0) or 0))
-        if not sym or entry <= 0:
-            continue
-        # Add .NS suffix if not present
+
+    # One download per symbol, covering its oldest open signal
+    open_rows = [r for r in rows if not r.get('outcome', '').strip() and r.get('symbol')]
+    earliest  = {}
+    for r in open_rows:
+        d = r.get('date', '')
+        if d and (r['symbol'] not in earliest or d < earliest[r['symbol']]):
+            earliest[r['symbol']] = d
+    bars = {}
+    for sym, d in earliest.items():
         fetch_sym = sym if sym.endswith('.NS') else f"{sym}.NS"
         try:
-            df = yf.download(fetch_sym, period="5d", interval="1d", progress=False)
+            df = yf.download(fetch_sym, start=d, interval="1d", progress=False)
             if df is None or df.empty:
                 continue
             df = df.dropna()
             df.columns = df.columns.get_level_values(0)
-            last  = df.iloc[-1]
-            hi    = float(last['High'])
-            lo    = float(last['Low'])
-            close = float(last['Close'])
-            outcome    = ''
-            exit_price = close
-            if lo <= stop:
-                outcome    = 'STOPPED'
-                exit_price = stop
-            elif hi >= target:
-                outcome    = 'TARGET HIT'
-                exit_price = target
+            bars[sym] = df
+        except Exception as e:
+            print(f"  ⚠️ {sym} outcome check failed: {e}")
+
+    for row in open_rows:
+        sym    = row['symbol']
+        entry  = float(row.get('entry', 0) or 0)
+        stop   = float(row.get('stop', 0) or 0)
+        target = float(row.get('target', 0) or 0)
+        qty    = int(float(row.get('qty', 0) or 0))
+        df     = bars.get(sym)
+        if entry <= 0 or df is None:
+            continue
+        try:
+            sig_date = pd.Timestamp(row['date'])
+            # Bars after the signal day only — the signal-day bar includes prices from before the alert
+            after = df[df.index.normalize() > sig_date]
+            outcome, exit_price, exit_date = '', None, None
+            for ts, bar in after.iterrows():
+                o, hi, lo = float(bar['Open']), float(bar['High']), float(bar['Low'])
+                if lo <= stop:
+                    outcome, exit_price = 'STOPPED', min(o, stop)
+                elif hi >= target:
+                    outcome, exit_price = 'TARGET HIT', max(o, target)
+                if outcome:
+                    exit_date = ts
+                    break
+            close = float(df['Close'].iloc[-1])
+            if not outcome and (today - sig_date).days >= MAX_HOLD_DAYS and not after.empty:
+                outcome, exit_price, exit_date = 'EXPIRED', close, after.index[-1]
             if outcome:
+                exit_price = round(exit_price, 2)
                 pnl_inr = round((exit_price - entry) * qty, 2)
                 pnl_pct = round((exit_price - entry) / entry * 100, 2)
                 row['outcome']      = outcome
-                row['outcome_date'] = today_str
+                row['outcome_date'] = exit_date.strftime('%Y-%m-%d')
                 row['exit_price']   = exit_price
                 row['pnl_inr']      = pnl_inr
                 row['pnl_pct']      = pnl_pct
                 updated += 1
-                emoji = "✅" if outcome == 'TARGET HIT' else "❌"
+                emoji = {"TARGET HIT": "✅", "STOPPED": "❌"}.get(outcome, "⌛")
                 print(f"  {emoji} {sym}: {outcome} | P&L ₹{pnl_inr:+.0f} ({pnl_pct:+.1f}%)")
             else:
                 unreal = round((close - entry) * qty, 2)
@@ -712,7 +748,8 @@ def print_trade_stats():
             rows = list(csv.DictReader(f))
     except Exception:
         return
-    closed = [r for r in rows if r.get('outcome','').strip() in ('TARGET HIT','STOPPED')]
+    closed  = [r for r in rows if r.get('outcome','').strip() in ('TARGET HIT','STOPPED')]
+    expired = sum(1 for r in rows if r.get('outcome', '').strip() == 'EXPIRED')
     if not closed:
         return
     wins  = [r for r in closed if r['outcome'] == 'TARGET HIT']
@@ -722,15 +759,15 @@ def print_trade_stats():
         pnls = [float(r['pnl_inr']) for r in closed if r.get('pnl_inr')]
         net  = sum(pnls)
         avg  = net / len(pnls) if pnls else 0
-        print(f"\n📈 Trade History: {total} closed | Win rate: {win_r:.0f}% | Net P&L: ₹{net:+,.0f} | Avg: ₹{avg:+.0f}")
+        print(f"\n📈 Trade History: {total} closed | Win rate: {win_r:.0f}% | Net P&L: ₹{net:+,.0f} | Avg: ₹{avg:+.0f} | Expired: {expired}")
     except Exception:
-        print(f"\n📈 Trade History: {total} closed | Win rate: {win_r:.0f}%")
+        print(f"\n📈 Trade History: {total} closed | Win rate: {win_r:.0f}% | Expired: {expired}")
 
 # =========================================
 # MAIN TECHNICAL SCANNER
 # =========================================
 
-def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
+def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD, risk_pct=RISK_PER_TRADE):
     try:
         df = yf.download(symbol, period="2y", interval="1d", progress=False)
         if df is None or df.empty or len(df) < 200:
@@ -984,7 +1021,7 @@ def check_stock(symbol, nifty_df, hot_sectors, threshold=SCORE_THRESHOLD):
         if risk <= 0 or risk > entry * MAX_STOP_PCT:
             return None
 
-        risk_amt = ACCOUNT_SIZE * RISK_PER_TRADE
+        risk_amt = ACCOUNT_SIZE * risk_pct
         qty      = min(int(risk_amt / risk), MAX_POSITION)
         if qty <= 0:
             return None
@@ -1063,6 +1100,9 @@ def get_recent_performance(n_days: int = 60) -> dict:
         cutoff      = datetime.now(IST).replace(tzinfo=None) - timedelta(days=n_days)
         recent      = df[df["date"] >= cutoff].copy()
         closed      = recent[recent["outcome"].isin(["TARGET HIT", "STOPPED"])].copy()
+        # Older logs re-logged the same open signal each run; those copies all close on
+        # the same day with the same result, so count each such exit once
+        closed      = closed.sort_values("date").drop_duplicates(["symbol", "outcome", "outcome_date"])
 
         def stats(rows):
             total = len(rows)
@@ -1070,8 +1110,8 @@ def get_recent_performance(n_days: int = 60) -> dict:
             return {"trades": total, "wins": wins,
                     "win_rate": round(wins / total, 2) if total > 0 else None}
 
-        by_setup  = {g: stats(gdf) for g, gdf in closed.groupby("setup")  if len(gdf) >= 2}
-        by_theme  = {g: stats(gdf) for g, gdf in closed.groupby("theme")  if len(gdf) >= 2}
+        by_setup  = {g: stats(gdf) for g, gdf in closed.groupby("setup")  if len(gdf) >= MIN_PERF_SAMPLE}
+        by_theme  = {g: stats(gdf) for g, gdf in closed.groupby("theme")  if len(gdf) >= MIN_PERF_SAMPLE}
 
         last5  = closed.sort_values("outcome_date").tail(5)
         streak = " → ".join(
@@ -1146,7 +1186,8 @@ MARKET CONDITIONS:
 - Breadth: {market_ctx.get('breadth_label', 'N/A')} ({market_ctx.get('breadth', 'N/A')}% above EMA50)
 - Hot themes: {market_ctx.get('hot_str', 'None')}
 
-RECENT SIGNAL PERFORMANCE (last 60 days — screener accuracy, not user P&L):
+RECENT SIGNAL PERFORMANCE (last 60 days — screener accuracy, not user P&L; unique signals only,
+setups/themes with fewer than {MIN_PERF_SAMPLE} closed signals are omitted as too small to judge):
 {chr(10).join(perf_lines) if perf_lines else 'No performance data yet.'}
 
 TODAY'S CANDIDATES ({len(candidates)} stocks):
@@ -1169,6 +1210,9 @@ Respond ONLY with a valid JSON object — no markdown fences, no extra text:
 Rules:
 - picks: top 3-5 by conviction. Downweight setups/themes with poor recent win rate.
 - skip: list candidates to avoid (sector weakness, poor setup history, overextension).
+  Only skip on setup/theme history when that setup/theme is clearly worse than the overall win rate —
+  if every category is weak, the history doesn't separate candidates, so judge on the indicators instead.
+  Skipped stocks are moved to the back of the list and shown with your reason as a caution.
 - Be specific — use actual indicator values and performance stats.
 - India context: prefer stocks with strong sector tailwinds (defence, pharma, IT rotation).
 """
@@ -1274,7 +1318,7 @@ sector_map = {
     "TORNTPOWER.NS":  "RENEW",
 
     # ---- EV & AUTO ----
-    "TATAMOTORS.NS":  "EV",
+    "TMPV.NS":        "EV",           # Tata Motors passenger vehicles (post-demerger)
     "M&M.NS":         "EV",
     "OLECTRA.NS":     "EV",
     "TVSMOTOR.NS":    "AUTO",
@@ -1299,7 +1343,7 @@ sector_map = {
     "DMART.NS":       "CONSUMP",
     "TRENT.NS":       "CONSUMP",
     "NYKAA.NS":       "CONSUMP",
-    "ZOMATO.NS":      "CONSUMP",
+    "ETERNAL.NS":     "CONSUMP",      # formerly Zomato
     "DEVYANI.NS":     "CONSUMP",
     "SAPPHIRE.NS":    "CONSUMP",
 
@@ -1646,7 +1690,7 @@ def run_agent():
             skipped_earn += 1
             continue
 
-        result = check_stock(symbol, nifty_df, hot_sectors, threshold=active_threshold)
+        result = check_stock(symbol, nifty_df, hot_sectors, threshold=active_threshold, risk_pct=effective_risk)
 
         if result:
             blocked, block_reason = pick_blocked_by_portfolio(result, positions, theme_pct)
@@ -1723,15 +1767,19 @@ def run_agent():
             print(f"  🧠 Skip  : {[s['symbol'] for s in claude_output.get('skip',[])]}")
 
     # ---- Step 5d: Re-rank by Claude conviction ----
+    # Claude's skips used to be deleted outright, which cut alerts to 2-3 on days when
+    # it leaned on thin win-rate samples. Now skipped stocks only move to the back of
+    # the queue and carry Claude's reason as a caution, so open slots still get filled.
     claude_picks_map = {}
-    skip_set         = set()
+    skip_map         = {}
     if claude_output and claude_output.get("picks"):
         claude_order     = [p["symbol"] for p in claude_output["picks"]]
         claude_picks_map = {p["symbol"]: p for p in claude_output["picks"]}
-        skip_set         = {s["symbol"] for s in claude_output.get("skip", [])}
+        skip_map         = {s["symbol"]: s["reason"] for s in claude_output.get("skip", [])}
         ordered   = [c for sym in claude_order for c in candidates if c['Symbol'] == sym]
-        fallback  = [c for c in candidates if c['Symbol'] not in set(claude_order) | skip_set]
-        top_picks = (ordered + fallback)[:TOP_PICKS]
+        rest      = [c for c in candidates if c['Symbol'] not in set(claude_order)]
+        rest.sort(key=lambda c: c['Symbol'] in skip_map)   # stable: unflagged first, score order kept
+        top_picks = (ordered + rest)[:TOP_PICKS]
     else:
         top_picks = candidates[:TOP_PICKS]
 
@@ -1803,6 +1851,7 @@ def run_agent():
         bear_size_warn = "\n⚠️ BEAR MARKET — use ¼ normal size" if regime == 'bear' else ""
         news_warn = "\n⚠️ NEGATIVE NEWS — review before entering" if ns <= -2 else ""
         ext_warn  = f"\n⚠️ {pick['Extension']}" if pick['Extension'].startswith("⚠️") else ""
+        caution   = f"\n⚠️ Claude caution: {skip_map[sym]}" if sym in skip_map else ""
 
         msg = (
             f"{'='*34}\n"
@@ -1828,6 +1877,7 @@ def run_agent():
             f"Reward  : ₹{int(pick['Reward₹']):,}\n"
             f"RR      : 1:{rr}"
             f"{bear_size_warn}"
+            f"{caution}"
             f"{news_warn}"
             f"{ext_warn}\n"
             f"{'='*34}"
@@ -1835,11 +1885,12 @@ def run_agent():
         send_telegram(msg)
         time.sleep(0.5)
 
-    # --- Claude skip list ---
-    skip_list = claude_output.get("skip", []) if claude_output else []
-    if skip_list:
-        skip_lines = "\n".join(f"  • {s['symbol']}: {s['reason']}" for s in skip_list)
-        send_telegram(f"⚠️ Claude flagged — lower priority:\n{skip_lines}")
+    # --- Claude-flagged candidates that didn't make the cut ---
+    sent      = {p['Symbol'] for p in top_picks}
+    left_out  = [(sym, why) for sym, why in skip_map.items() if sym not in sent]
+    if left_out:
+        skip_lines = "\n".join(f"  • {sym}: {why}" for sym, why in left_out)
+        send_telegram(f"⚠️ Claude flagged — not sent (lower priority):\n{skip_lines}")
         time.sleep(0.3)
 
     # --- Momentum-only alerts ---

@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .env
 *.csv
+# the agent state files must be committed by the workflow (see india_agent.yml)
+!trade_log.csv
+!positions.csv
