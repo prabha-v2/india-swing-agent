@@ -1,0 +1,7 @@
+date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr,rr,news_sentiment,confirmed_15m,outcome,outcome_date,exit_price,pnl_inr,pnl_pct
+2026-09-24,DIVISLAB,PHARMA,EMA20 Pullback,29,9612.0,9226.43,10768.71,3,28836,1157,3470,3.0,Positive,Yes,,,,,
+2026-09-24,CASTROLIND,OTHER,EMA20 Pullback,29,194.77,190.1,208.78,267,52004,1247,3741,3.0,Positive,Yes,,,,,
+2026-09-24,AUROPHARMA,PHARMA,EMA20 Pullback,29,1729.2,1656.76,1946.53,17,29396,1232,3695,3.0,Positive,Yes,,,,,
+2026-09-24,ABDL,FMCG,Volume Breakout,34,678.0,635.6,805.2,29,19662,1230,3689,3.0,Positive,Yes,,,,,
+2026-09-24,CARBORUNIV,INFRA,ATH Breakout,29,1342.3,1229.87,1679.59,11,14765,1237,3710,3.0,Positive,Yes,,,,,
+2026-09-24,RADICO,FMCG,EMA20 Pullback,29,4593.6,4396.81,5183.96,6,27562,1181,3542,3.0,Positive,No,,,,,
