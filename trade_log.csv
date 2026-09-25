@@ -13,3 +13,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-09-24,APLAPOLLO,INFRA,EMA20 Pullback,26,2202.8,2110.0,2481.2,13,28636,1206,3619,3.0,Neutral,Yes,,,,,
 2026-09-25,ACMESOLAR,RENEW,Trend Continuation,25,445.15,411.5,546.1,37,16471,1245,3735,3.0,Positive,No,,,,,
 2026-09-25,BALRAMCHIN,FMCG,EMA20 Pullback,26,677.95,651.3,757.9,46,31186,1226,3678,3.0,Positive,Yes,,,,,
+2026-09-25,ENGINERSIN,INFRA,ATH Breakout,25,301.5,279.34,367.98,56,16884,1241,3723,3.0,Positive,Yes,,,,,
