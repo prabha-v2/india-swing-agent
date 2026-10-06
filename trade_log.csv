@@ -20,3 +20,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-06,HFCL,TELECOM,ATH Breakout,26,262.78,242.42,323.86,61,16030,1242,3726,3.0,Neutral,Yes,,,,,
 2026-10-06,BEML,DEFENCE,EMA20 Pullback,27,2001.6,1930.0,2216.4,17,34027,1217,3652,3.0,Neutral,Yes,,,,,
 2026-10-06,CARBORUNIV,INFRA,Trend Continuation,27,1272.2,1194.0,1506.8,15,19083,1173,3519,3.0,Neutral,Yes,,,,,
+2026-10-06,MIDHANI,DEFENCE,ATH Breakout,26,462.0,431.49,553.54,40,18480,1221,3662,3.0,Neutral,No,,,,,
+2026-10-06,ACE,INFRA,EMA20 Pullback,28,1241.5,1180.1,1425.7,20,24830,1228,3684,3.0,Neutral,No,,,,,
