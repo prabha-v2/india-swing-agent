@@ -35,3 +35,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-09,RADICO,FMCG,EMA20 Pullback,26,4534.4,4267.83,5334.11,4,18138,1066,3199,3.0,Neutral,Yes,,,,,
 2026-10-09,AZAD,INFRA,EMA20 Pullback,25,2920.5,2817.0,3231.0,12,35046,1242,3726,3.0,Neutral,Yes,,,,,
 2026-10-12,HONASA,FMCG,EMA20 Pullback,25,478.85,446.7,575.3,38,18196,1222,3665,3.0,Neutral,Yes,,,,,
+2026-10-13,HAL,DEFENCE,EMA20 Pullback,25,4798.0,4590.0,5422.0,6,28788,1248,3744,3.0,Neutral,Yes,,,,,
+2026-10-13,FINCABLES,INFRA,EMA20 Pullback,30,1455.6,1377.9,1688.7,16,23290,1243,3730,3.0,Neutral,Yes,,,,,
