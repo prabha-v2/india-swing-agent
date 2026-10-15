@@ -42,3 +42,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-15,JINDALSAW,INFRA,EMA20 Pullback,26,297.05,276.11,359.86,59,17526,1235,3706,3.0,Neutral,Yes,,,,,
 2026-10-15,BBOX,IT,Trend Continuation,25,897.25,851.2,1035.4,27,24226,1243,3730,3.0,Neutral,No,,,,,
 2026-10-15,HEXT,IT,Trend Continuation,27,581.05,539.75,704.95,30,17431,1239,3717,3.0,Neutral,Yes,,,,,
+2026-10-15,GALLANTT,INFRA,Volume Breakout,25,631.5,569.71,816.86,20,12630,1236,3707,3.0,Neutral,No,,,,,
+2026-10-15,HCLTECH,IT,Trend Continuation,26,1368.9,1289.01,1608.56,15,20534,1198,3595,3.0,Neutral,No,,,,,
