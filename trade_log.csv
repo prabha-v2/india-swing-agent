@@ -53,3 +53,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-19,CHENNPETRO,OTHER,EMA20 Pullback,26,1441.8,1391.8,1591.8,25,36045,1250,3750,3.0,Neutral,Yes,,,,,
 2026-10-19,WELCORP,INFRA,EMA20 Pullback,25,2605.4,2450.2,3071.0,8,20843,1242,3725,3.0,Neutral,Yes,,,,,
 2026-10-19,ZENSARTECH,IT,Trend Continuation,25,516.7,479.45,628.45,33,17051,1229,3688,3.0,Neutral,Yes,,,,,
+2026-10-19,PTCIL,INFRA,ATH Breakout,28,25190.0,24130.0,28370.0,1,25190,1060,3180,3.0,Neutral,Yes,,,,,
+2026-10-19,STLTECH,TELECOM,EMA20 Pullback,26,901.4,834.55,1101.95,18,16225,1203,3610,3.0,Neutral,Yes,,,,,
