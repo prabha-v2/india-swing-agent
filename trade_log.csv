@@ -55,3 +55,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-19,ZENSARTECH,IT,Trend Continuation,25,516.7,479.45,628.45,33,17051,1229,3688,3.0,Neutral,Yes,,,,,
 2026-10-19,PTCIL,INFRA,ATH Breakout,28,25190.0,24130.0,28370.0,1,25190,1060,3180,3.0,Neutral,Yes,,,,,
 2026-10-19,STLTECH,TELECOM,EMA20 Pullback,26,901.4,834.55,1101.95,18,16225,1203,3610,3.0,Neutral,Yes,,,,,
+2026-10-21,LTTS,INFRA,Volume Breakout,26,4067.6,3747.21,5028.76,3,12203,961,2883,3.0,Neutral,Yes,,,,,
+2026-10-21,TCS,IT,Trend Continuation,26,2517.1,2358.33,2993.41,7,17620,1111,3334,3.0,Neutral,Yes,,,,,
