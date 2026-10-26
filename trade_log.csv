@@ -60,3 +60,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-10-22,WIPRO,IT,Trend Continuation,30,191.81,181.43,222.94,120,23017,1245,3736,3.0,Neutral,Yes,,,,,
 2026-10-22,SAGILITY,IT,EMA20 Pullback,26,44.86,42.92,50.68,644,28890,1249,3748,3.0,Neutral,Yes,STOPPED,2026-10-26,42.92,-1249.36,-4.32
 2026-10-22,CHENNPETRO,OTHER,EMA20 Pullback,26,1461.0,1377.3,1712.1,14,20454,1172,3515,3.0,Neutral,Yes,,,,,
+2026-10-26,MRPL,OTHER,EMA20 Pullback,25,176.21,159.0,227.84,72,12687,1239,3717,3.0,Neutral,Yes,,,,,
