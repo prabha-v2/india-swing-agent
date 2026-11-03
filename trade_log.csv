@@ -76,3 +76,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-02,LT,INFRA,EMA20 Pullback,29,3897.5,3734.63,4386.11,7,27282,1140,3420,3.0,Neutral,Yes,,,,,
 2026-11-02,GAIL,OTHER,EMA20 Pullback,26,176.55,167.87,202.6,143,25247,1242,3725,3.0,Neutral,Yes,,,,,
 2026-11-02,PERSISTENT,IT,Trend Continuation,28,6095.0,5674.71,7355.86,2,12190,841,2522,3.0,Neutral,No,,,,,
+2026-11-03,SHYAMMETL,INFRA,ATH Breakout,27,1233.6,1128.24,1549.67,11,13570,1159,3477,3.0,Neutral,Yes,,,,,
