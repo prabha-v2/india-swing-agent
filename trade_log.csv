@@ -81,3 +81,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-04,DLF,REALTY,Trend Continuation,30,720.7,687.64,819.89,37,26666,1223,3670,3.0,Positive,Yes,,,,,
 2026-11-04,ADANIPORTS,LOGISTICS,ATH Breakout,30,1901.8,1801.07,2203.99,12,22822,1209,3626,3.0,Slightly Positive,No,,,,,
 2026-11-04,JSWSTEEL,METAL,ATH Breakout,29,1333.0,1259.71,1552.86,17,22661,1246,3738,3.0,Neutral,Yes,,,,,
+2026-11-04,GRASIM,CEMENT,EMA20 Pullback,30,3135.0,3000.3,3539.1,9,28215,1212,3637,3.0,Positive,Yes,,,,,
