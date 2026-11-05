@@ -85,3 +85,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-05,BSE,CAP MKT,Trend Continuation,28,3742.6,3528.33,4385.41,23,86080,4928,14785,3.0,Positive,Yes,,,,,
 2026-11-05,CEMPRO,INFRA,Trend Continuation,28,1334.6,1251.2,1584.8,59,78741,4921,14762,3.0,Positive,Yes,,,,,
 2026-11-05,ITCHOTELS,CONSUMP,Trend Continuation,27,176.67,166.79,206.31,506,89395,4999,14998,3.0,Neutral,Yes,,,,,
+2026-11-05,LGEINDIA,ELECTRICAL,ATH Breakout,33,1789.9,1694.2,2077.0,52,93075,4976,14929,3.0,Neutral,Yes,,,,,
+2026-11-05,INDIANB,PSU BANK,EMA20 Pullback,29,883.0,835.39,1025.82,105,92715,4999,14996,3.0,Neutral,No,,,,,
