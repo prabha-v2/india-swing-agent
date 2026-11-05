@@ -87,3 +87,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-05,ITCHOTELS,CONSUMP,Trend Continuation,27,176.67,166.79,206.31,506,89395,4999,14998,3.0,Neutral,Yes,,,,,
 2026-11-05,LGEINDIA,ELECTRICAL,ATH Breakout,33,1789.9,1694.2,2077.0,52,93075,4976,14929,3.0,Neutral,Yes,,,,,
 2026-11-05,INDIANB,PSU BANK,EMA20 Pullback,29,883.0,835.39,1025.82,105,92715,4999,14996,3.0,Neutral,No,,,,,
+2026-11-05,ASAHIINDIA,AUTO,Volume Breakout,32,1021.75,956.31,1218.06,76,77653,4973,14919,3.0,Neutral,No,,,,,
+2026-11-05,NHPC,RENEW,Volume Breakout,30,81.39,76.91,94.82,1116,90831,4996,14989,3.0,Slightly Positive,Yes,,,,,
