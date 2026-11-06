@@ -90,3 +90,6 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-05,ASAHIINDIA,AUTO,Volume Breakout,32,1021.75,956.31,1218.06,76,77653,4973,14919,3.0,Neutral,No,,,,,
 2026-11-05,NHPC,RENEW,Volume Breakout,30,81.39,76.91,94.82,1116,90831,4996,14989,3.0,Slightly Positive,Yes,,,,,
 2026-11-05,PNB,PSU BANK,EMA20 Pullback,32,126.61,120.09,146.17,766,96983,4994,14983,3.0,Positive,Yes,,,,,
+2026-11-06,PHOENIXLTD,REALTY,ATH Breakout,29,2116.1,1996.13,2476.01,41,86760,4919,14756,3.0,Positive,Yes,,,,,
+2026-11-06,ADANIGREEN,RENEW,Trend Continuation,27,1409.3,1320.63,1675.31,56,78921,4966,14897,3.0,Neutral,Yes,,,,,
+2026-11-06,GROWW,BANK,Trend Continuation,26,213.9,197.74,262.39,309,66095,4995,14984,3.0,Neutral,No,,,,,
