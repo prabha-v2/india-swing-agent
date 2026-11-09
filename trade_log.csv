@@ -96,3 +96,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-06,MCX,CAP MKT,ATH Breakout,29,3437.0,3180.16,4207.53,19,65303,4880,14640,3.0,Positive,Yes,,,,,
 2026-11-06,ANGELONE,CAP MKT,Trend Continuation,27,330.05,306.37,401.08,211,69641,4996,14988,3.0,Slightly Positive,Yes,,,,,
 2026-11-06,MARICO,FMCG,ATH Breakout,27,895.65,849.99,1032.62,109,97626,4977,14930,3.0,Neutral,Yes,,,,,
+2026-11-09,CPPLUS,INFRA,Squeeze Setup,29,4297.7,3906.8,5470.4,12,51572,4691,14072,3.0,Slightly Positive,Yes,,,,,
+2026-11-09,KALYANKJIL,ELECTRICAL,Trend Continuation,24,609.8,562.56,751.51,105,64029,4960,14879,3.0,Positive,Yes,,,,,
