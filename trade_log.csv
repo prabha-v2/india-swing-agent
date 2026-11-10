@@ -100,3 +100,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-09,KALYANKJIL,ELECTRICAL,Trend Continuation,24,609.8,562.56,751.51,105,64029,4960,14879,3.0,Positive,Yes,,,,,
 2026-11-09,OBEROIRLTY,REALTY,Trend Continuation,26,1786.0,1689.96,2074.11,52,92872,4994,14982,3.0,Slightly Negative,Yes,,,,,
 2026-11-09,WELSPUNLIV,OTHER,Trend Continuation,26,252.62,236.38,301.34,307,77554,4986,14957,3.0,Positive,Yes,,,,,
+2026-11-10,NAVINFLUOR,CHEM,ATH Breakout,30,9115.0,8456.79,11089.63,7,63805,4607,13822,3.0,Slightly Positive,Yes,,,,,
+2026-11-10,MAHABANK,BANK,Trend Continuation,30,87.68,81.86,105.14,859,75317,4998,14994,3.0,Positive,Yes,,,,,
