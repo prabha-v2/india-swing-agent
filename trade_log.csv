@@ -103,3 +103,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-10,NAVINFLUOR,CHEM,ATH Breakout,30,9115.0,8456.79,11089.63,7,63805,4607,13822,3.0,Slightly Positive,Yes,,,,,
 2026-11-10,MAHABANK,BANK,Trend Continuation,30,87.68,81.86,105.14,859,75317,4998,14994,3.0,Positive,Yes,,,,,
 2026-11-11,BANKBARODA,PSU BANK,Volume Breakout,30,273.89,259.83,316.08,355,97231,4992,14977,3.0,Positive,No,,,,,
+2026-11-11,INDIGO,LOGISTICS,Volume Breakout,34,5648.0,5329.57,6603.29,15,84720,4776,14329,3.0,Slightly Positive,No,,,,,
+2026-11-11,CDSL,CAP MKT,Volume Breakout,28,1413.5,1331.76,1658.73,61,86224,4986,14959,3.0,Positive,No,,,,,
