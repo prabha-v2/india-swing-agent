@@ -110,3 +110,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-13,CRAFTSMAN,AUTO,EMA20 Pullback,29,11055.0,10130.0,13830.0,5,55275,4625,13875,3.0,Neutral,No,,,,,
 2026-11-13,PETRONET,OTHER,ATH Breakout,26,330.25,312.64,383.07,283,93461,4983,14949,3.0,Positive,No,,,,,
 2026-11-13,EIHOTEL,CONSUMP,Trend Continuation,25,322.5,304.0,378.0,270,87075,4995,14985,3.0,Positive,Yes,,,,,
+2026-11-13,NYKAA,CONSUMP,EMA20 Pullback,30,365.0,344.55,426.35,244,89060,4990,14969,3.0,Positive,Yes,,,,,
