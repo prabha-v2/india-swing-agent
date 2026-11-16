@@ -115,3 +115,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-13,BANKINDIA,BANK,Trend Continuation,26,154.07,144.83,181.8,540,83198,4991,14973,3.0,Positive,Yes,,,,,
 2026-11-16,PNB,PSU BANK,ATH Breakout,30,145.45,137.84,168.28,656,95415,4993,14979,3.0,Positive,Yes,,,,,
 2026-11-16,LENSKART,CONSUMP,ATH Breakout,28,740.0,701.5,855.5,129,95460,4966,14900,3.0,Positive,Yes,,,,,
+2026-11-16,KPRMILL,OTHER,Trend Continuation,28,1198.0,1137.8,1378.6,83,99434,4997,14990,3.0,Neutral,Yes,,,,,
+2026-11-16,SBILIFE,INSURANCE,Trend Continuation,27,1821.5,1730.0,2096.0,54,98361,4941,14823,3.0,Positive,Yes,,,,,
