@@ -126,3 +126,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-18,SAGILITY,IT,EMA20 Pullback,27,45.32,42.9,52.58,2000,90640,4840,14520,3.0,Positive,No,,,,,
 2026-11-18,FINEORG,CHEM,ATH Breakout,28,5536.0,5260.0,6364.0,18,99648,4968,14904,3.0,Slightly Negative,Yes,,,,,
 2026-11-19,IDFCFIRSTB,BANK,Trend Continuation,27,84.35,80.04,97.29,1158,97677,4996,14988,3.0,Positive,Yes,,,,,
+2026-11-19,FLUOROCHEM,CHEM,Volume Breakout,34,4975.9,4601.56,6098.93,13,64687,4866,14599,3.0,Positive,Yes,,,,,
