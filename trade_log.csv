@@ -129,3 +129,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-19,FLUOROCHEM,CHEM,Volume Breakout,34,4975.9,4601.56,6098.93,13,64687,4866,14599,3.0,Positive,Yes,,,,,
 2026-11-20,NUVOCO,CEMENT,Squeeze Breakout,33,358.85,337.56,422.71,234,83971,4981,14943,3.0,Neutral,Yes,,,,,
 2026-11-20,INDUSINDBK,BANK,Trend Continuation,27,982.45,921.78,1164.46,82,80561,4975,14925,3.0,Positive,Yes,,,,,
+2026-11-20,LGEINDIA,ELECTRICAL,EMA20 Pullback,29,1779.0,1672.0,2100.0,46,81834,4922,14766,3.0,Slightly Positive,Yes,,,,,
