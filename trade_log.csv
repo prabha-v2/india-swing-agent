@@ -130,3 +130,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-20,NUVOCO,CEMENT,Squeeze Breakout,33,358.85,337.56,422.71,234,83971,4981,14943,3.0,Neutral,Yes,,,,,
 2026-11-20,INDUSINDBK,BANK,Trend Continuation,27,982.45,921.78,1164.46,82,80561,4975,14925,3.0,Positive,Yes,,,,,
 2026-11-20,LGEINDIA,ELECTRICAL,EMA20 Pullback,29,1779.0,1672.0,2100.0,46,81834,4922,14766,3.0,Slightly Positive,Yes,,,,,
+2026-11-20,CEMPRO,INFRA,Trend Continuation,29,1407.6,1291.71,1755.26,43,60527,4983,14949,3.0,Positive,Yes,,,,,
+2026-11-20,EIHOTEL,CONSUMP,Volume Breakout,28,334.6,312.56,400.71,226,75620,4980,14940,3.0,Positive,Yes,,,,,
