@@ -135,3 +135,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-23,SBIN,PSU BANK,ATH Breakout,24,1154.0,1096.45,1326.65,86,99244,4949,14848,3.0,Slightly Positive,No,,,,,
 2026-11-23,PRIVISCL,CHEM,ATH Breakout,26,3655.0,3419.32,4362.03,21,76755,4949,14848,3.0,Positive,Yes,,,,,
 2026-11-23,TCS,IT,EMA20 Pullback,25,2479.0,2344.4,2882.8,37,91723,4980,14941,3.0,Slightly Positive,Yes,,,,,
+2026-11-23,JSWINFRA,LOGISTICS,Volume Breakout,31,353.3,331.59,418.44,230,81259,4994,14983,3.0,Positive,Yes,,,,,
+2026-11-23,LTTS,INFRA,EMA20 Pullback,30,4225.0,4001.0,4897.0,22,92950,4928,14784,3.0,Positive,Yes,,,,,
