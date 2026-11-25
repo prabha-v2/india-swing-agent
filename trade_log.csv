@@ -145,3 +145,5 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-25,AXISBANK,BANK,ATH Breakout,33,1440.8,1363.19,1673.64,64,92211,4967,14902,3.0,Slightly Positive,Yes,,,,,
 2026-11-25,TRENT,CONSUMP,Trend Continuation,29,3317.5,3150.19,3819.44,29,96208,4852,14556,3.0,Neutral,Yes,,,,,
 2026-11-25,EICHERMOT,AUTO,ATH Breakout,29,8307.0,7848.57,9682.29,10,83070,4584,13753,3.0,Positive,Yes,,,,,
+2026-11-25,DABUR,FMCG,Volume Breakout,27,423.75,401.45,490.65,224,94920,4995,14986,3.0,Positive,Yes,,,,,
+2026-11-25,CPPLUS,INFRA,EMA20 Pullback,27,4199.0,3928.0,5012.0,18,75582,4878,14634,3.0,Slightly Positive,Yes,,,,,
