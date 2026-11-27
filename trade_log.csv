@@ -151,3 +151,4 @@ date,symbol,theme,setup,score,entry,stop,target,qty,invested,risk_inr,reward_inr
 2026-11-26,SUNTV,OTHER,EMA20 Pullback,26,646.6,599.0,789.4,105,67893,4998,14994,3.0,Neutral,Yes,,,,,
 2026-11-27,BEML,DEFENCE,EMA20 Pullback,34,2138.3,1996.0,2565.2,35,74841,4981,14942,3.0,Neutral,Yes,,,,,
 2026-11-27,ACMESOLAR,RENEW,EMA20 Pullback,27,428.8,403.77,503.89,199,85331,4981,14942,3.0,Neutral,Yes,,,,,
+2026-11-27,TEXRAIL,RAILWAYS,Trend Continuation,28,124.84,115.98,151.43,564,70410,4999,14996,3.0,Positive,Yes,,,,,
